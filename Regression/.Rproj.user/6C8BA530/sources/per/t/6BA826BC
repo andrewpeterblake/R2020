@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601991505711.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1346751971",
+    "id" : "6BA826BC",
+    "lastKnownWriteTime" : 1601996618,
+    "last_content_update" : 1601996618313,
+    "path" : "C:/Users/145607/Desktop/R_course_2020/Day 1/Fans.R",
+    "project_path" : "Fans.R",
+    "properties" : {
+        "cursorPosition" : "132,0",
+        "scrollLine" : "117",
+        "tempName" : "Untitled2"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 7,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

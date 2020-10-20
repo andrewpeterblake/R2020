@@ -1,0 +1,23 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601974997503.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "3263813815",
+    "id" : "665CF03",
+    "lastKnownWriteTime" : 1601924243,
+    "last_content_update" : 1601924243,
+    "path" : "C:/Users/145607/Desktop/R_course_2020/Day 1/DiD.Rmd",
+    "project_path" : "DiD.Rmd",
+    "properties" : {
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 1,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

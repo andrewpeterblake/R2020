@@ -1,0 +1,133 @@
+## Build-your-own fancharts in R
+
+library(tidyverse)
+library(lubridate)  # From the tidyverse but not automatically loaded
+series <- c('A191RO1Q156NBEA', 'CPALTT01USQ661S') # FRED codes for US GDP growth & CPI
+
+download.file(paste("https://fred.stlouisfed.org/series/","/downloaddata/",".csv", sep=series[1]), 
+              destfile = "Growth.csv")
+download.file(paste("https://fred.stlouisfed.org/series/","/downloaddata/",".csv", sep=series[2]), 
+              destfile = "CPI.csv")
+
+Growth <- readr::read_csv("Growth.csv") %>% 
+  rename(index=DATE, value=VALUE) %>% 
+  mutate(series="Growth")
+CPI    <- readr::read_csv("CPI.csv")  %>% 
+  rename(index=DATE, value=VALUE) %>% 
+  mutate(series="CPI")
+
+
+Data <- pivot_wider(bind_rows(Growth, CPI), names_from = series, values_from = value) %>% 
+  mutate(Inflation=100*(CPI/lag(CPI,4)-1)) %>%
+  select(Date=index, Growth, Inflation) %>% 
+  drop_na() # Drop missing obs to balance dataset
+
+col_cen  <- c("seagreen","tomato") # Colours for time series/centre of fancharts
+col_tail <- "grey95"               # Colour used later for the tails 
+Data %>% 
+  pivot_longer(cols = -Date, names_to = "Var", values_to = "Val") %>% 
+  ggplot() + 
+  geom_line(aes(x=Date, y=Val, group=Var, colour=Var), size=1.1, show.legend=TRUE) +
+  scale_colour_manual(values=col_cen) +
+  theme_minimal() + 
+  theme(legend.title = element_blank()) +
+  labs(title="US data", x="", y="",
+       subtitle="GDP growth and inflation: year-on-year quarterly growth rates", 
+       caption=paste0("Source: FRED series ", paste(series, collapse=", ")))
+
+### The VAR
+
+m     <- 8  # maximum lag in VAR
+
+Datal <- Data %>%
+  pivot_longer(cols = -Date, names_to = "key", values_to = "value") %>%
+  mutate(lv = list(0:m)) %>%
+  unnest(cols = c(lv)) %>%
+  group_by(key, lv) %>%
+  mutate(value = lag(value, lv[1])) %>%
+  ungroup() %>%  
+  # Suffixes indicate lagged values
+  mutate(key = if_else(lv==0, key, paste(key,formatC(lv,width=2,flag="0"), sep="_"))) %>%
+  select(-lv) %>%     # Drop the redundant lag index
+  pivot_wider(names_from = key, values_from = value) %>%
+  slice(-c(1:m)) %>% # Remove missing initial values
+  mutate(constant = 1)
+
+s  <- paste(paste(formatC(1:m, width=2, flag="0"),"$",sep=""),collapse="|")
+Yl <- data.matrix(select(Datal,  matches(paste0(s,"|constant"))))
+Y  <- data.matrix(select(Datal, -matches(paste0(s,"|constant|Date"))))
+
+
+bhat <- solve(crossprod(Yl), crossprod(Yl,Y))
+bhat
+
+
+### Forecast
+
+T     <- nrow(Y) # Number of observations
+nv    <- ncol(Y) # Number of variables
+nf    <- 12      # Periods to forecast
+nb    <- 16      # Periods of back data to plot
+
+# Recover the VAR residuals, calculate error variances
+v     <- crossprod(Y - Yl %*% bhat)/(T-m*nv-1)                  
+bhat2 <- bhat[rep(seq(1,m*nv,m),m) + rep(seq(0,m-1), each=nv),] # Reorder for simulation
+A     <- rbind(t(bhat2), diag(1,nv*(m-1), nv*m))                # First order form - A 
+B     <- diag(1,nv*m,nv)                                        # First order form - B
+cnst  <- c(t(tail(bhat,1)), rep(0,nv*(m-1)))                    # First order constants
+
+# Simulation loop
+Yf     <- matrix(0,nv*m,nf)                  # Stores forecasts
+Pf     <- matrix(0,nv,nf)                    # Stores variances
+
+Yf[,1] <- cnst + A %*% c(t(tail(Y,m)[m:1,])) # First period
+P      <- B %*% v %*% t(B)                   # First period state covariance
+Pf[,1] <- diag(P)[1:nv]                      # Variance
+
+for (k in 2:nf) { 
+  Yf[,k] <- cnst + A %*% Yf[,(k-1)]
+  P      <- A %*% P %*% t(A) + B %*% v %*% t(B)
+  Pf[,k] <- diag(P)[1:nv]
+}
+
+Yf <- t(Yf[1:nv,])
+colnames(Yf) <- colnames(Data)[-1]
+Pf <- t(sqrt(Pf))
+
+
+### Fancharts
+
+fcast_dates <- seq.Date(tail(Data$Date,1), by="quarter", length.out=nf+1)
+fan_data    <- bind_rows(tail(Data,nb), data.frame(Date=fcast_dates[-1], Yf)) %>%
+  pivot_longer(cols = -Date, names_to = "Var", values_to = "Data") 
+
+qu  <- qnorm(c(.05,.2,.35,.65,.8,.95)) # Specify quartiles to show 30% prob per colour
+
+col_band <- NULL                       # Used to store the band colours 
+for (j in 1:nv) {
+  col_band  <- c(col_band, colorRampPalette(c(col_tail, col_cen[j], col_tail))(7)[2:6])
+  fore_band <- rbind(rep(tail(Y,1)[j], 6), tcrossprod(Pf[,j], qu) + Yf[,j]) 
+  data_coor <- data.frame(rbind(fore_band[,1:5], fore_band[(nf+1):1,2:6])) %>% 
+    rename_with( ~ paste0("Area",1:5)) %>%
+    mutate(Var = colnames(Y)[j], Date = c(fcast_dates, rev(fcast_dates))) %>%
+    pivot_longer(cols = -c(Date, Var), names_to = "Area", values_to = "coord") %>% 
+    mutate(VarArea = paste0(Var, Area)) # This identifies separate bands by variable
+  fan_data <- bind_rows(fan_data, data_coor)
+}
+
+
+ggplot(fan_data) + 
+  geom_rect(aes(xmin=max(Date) %m-% months(3*nf), xmax=max(Date), 
+                ymin=-Inf, ymax=Inf), fill=col_tail, alpha=.2) +
+  geom_polygon(aes(x=Date, y=coord, group=Area, fill=VarArea), show.legend=FALSE) +
+  scale_fill_manual(values=col_band) +
+  geom_line(aes(x=Date, y=Data, group=Var, colour=Var), show.legend=FALSE) +
+  scale_colour_manual(values=col_cen) +
+  scale_x_date(expand=c(0,0)) +
+  theme_minimal() +
+  facet_wrap( ~ Var, ncol=1) +
+  labs(title=paste("US data:", nv, "variable VAR with", m, "lags"), 
+       subtitle="GDP and CPI: quarterly year-on-year growth/inflation rates", 
+       caption=paste0("Source: FRED series ", paste(series, collapse=", ")),
+       x="", y="")
+

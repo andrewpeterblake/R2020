@@ -1,0 +1,216 @@
+---
+title: "R Modelling"
+subtitle: "CCBS online seminar"
+author: "Andrew P Blake and Maria Brady"
+date: "6--8 October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+-----------
+
+## Overview
+
+This seminar will equip people who so far only have a basic knowledge of R with some of the tools to perform a variety of economic modelling tasks. We will cover aspects of classical and Bayesian regression models, three applications of quantile regression, solving and simulating rational expectations models, understanding MCMC methods and an introduction to text modelling for central bankers. We make extensive use of the `tidyverse` including `ggplot2`, and a number of econometric and statistics packages but also how we can use R to, say, program our own estimators.
+
+The framework for each day is the following:
+
+- A first webinar covers some basic techniques used later in the day
+- There are recorded presentations covering the coding up of (usually) three applications
+- Additional recording of some of the methods are also available and supplied when appropriate
+- A second webinar covers aspects of the methods covered during the day
+
+We will run polls during the day to prioritize the topics covered in the second webinar as it is not expected that everyone will be able to view and try out everything.
+
+### The code
+
+All code will be distributed separately in zip files. For each video the .Rmd (R markdown) file is supplied that creates the presentation, an HTML file of the presentation for you to step through which can be re-created from the .Rmd file, and a further .R file of the code that we use. Some additional code and data is also in each zip. 
+
+#### HOW TO ENSURE RSTUDIO FINDS THE CODE
+
+To use the code, in particular so that R Studio finds the data files etc, create a daily directory, (e.g. Day_1, Day_2 etc) and unzip the file contents into it. Then create a new project for each day in R Studio that uses that directory as its home directory, using "File/New Project" in the drop down menu. Opening files within a project sets the home directory to that directory, so everything (including the sub-directories) can be found.
+
+## Day 1
+
+### Webinar 1:1
+
+- A helicopter tour of R for economists
+    - Being `tidy`, handling data, visualization
+    - Doing computational linear algebra
+    - Econometric packages
+    - A little bit of R Markdown
+
+#### Webinar recording
+    
+<center>
+<iframe src="https://register.gotowebinar.com/recording/6392249852225582338" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+### Videos plus interactive exercises on:
+
+- How the coding videos work: R Markdown breakdown
+<center>
+<iframe src="https://player.vimeo.com/video/463040087" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- Linear algebra
+<center>
+<iframe src="https://player.vimeo.com/video/463130391" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- A brief introduction to `ggplot2`
+<center>
+<iframe src="https://player.vimeo.com/video/463064376" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- From fixed effects to multilevel models
+
+  FIXED EFFECTS estimation is covered in the workshop -- the link to multilevel models is not yet done. See Gelman, Hill and Vehtari (2021)^[Despite the publication date this book is already available.] _Regression and Other Stories_, chapter 22 for a great discussion. 
+
+- Extra regression topic: Many multiple regressions
+<center>
+<iframe src="https://player.vimeo.com/video/463362408" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- Visualizing US unemployment SPF forecasts
+<center>
+<iframe src="https://player.vimeo.com/video/463152058" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- DIY fan charts
+<center>
+<iframe src="https://player.vimeo.com/video/463372275" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+Additional topic: Shiny
+<center>
+<iframe src="https://player.vimeo.com/video/463164257" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+### Webinar 1:2
+
+Coding workshop
+
+#### Coding workshop recording
+    
+<center>
+<iframe src="https://attendee.gotowebinar.com/recording/4156155462631504898" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+## Day 2
+
+### Webinar 2:1
+
+- Introduction to:
+    - Quantile regression for fan charts
+    - Drawing random numbers and introducing Bayesian computation
+
+#### Webinar recording
+
+<center>
+<iframe src="https://attendee.gotowebinar.com/recording/7959568493268698115" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+## Videos on:
+
+- CoVaR by Somnath Chatterjee, CCBS; you need to supply your name and email to watch Somnath's presentation
+    <center>
+    <iframe src="https://attendee.gotowebinar.com/recording/4720642533159773707" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+    </center>
+
+- Applications of QR    
+    - Coding CoVaR
+    <center>
+    <iframe src="https://player.vimeo.com/video/463461316" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+    </center>
+    - Coding GDP @ Risk
+    <center>
+    <iframe src="https://player.vimeo.com/video/463465970" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+    </center>
+    
+- Gibbs sampling
+<center>
+<iframe src="https://player.vimeo.com/video/463471335" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+- Bayesian fan charts
+<center>
+<iframe src="https://player.vimeo.com/video/463753502" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+If you would like more details of Gibbs Sampling the same material but concentrating on the theory not the coding from our Applied Bayesian Econometrics course [can be found here](https://vimeo.com/441290528). A very technical description of [linear regression in a Bayesian framework](https://vimeo.com/441275408) may also be of interest.
+
+
+### Webinar 2:2
+
+Coding workshop
+
+#### Coding workshop recording
+
+<center>
+<iframe src="https://attendee.gotowebinar.com/recording/6115797444651140611" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+## Day 3
+
+### Webinar 3:1
+
+- Introduction to:
+    - Building blocks for DSGE estimation, including solving models
+    - `tidytext` for central bankers
+
+#### Webinar recording
+
+<center>
+<iframe src="https://attendee.gotowebinar.com/recording/7121409679915064065" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+
+### Videos on:
+
+- Solving rational expectations models in R
+<center>
+<iframe src="https://player.vimeo.com/video/464664941" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- Understanding the Metropolis-Hastings algorithm
+<center>
+<iframe src="https://player.vimeo.com/video/464678433" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- Estimating DSGE models in R (a sketch)
+<center>
+<iframe src="https://player.vimeo.com/video/465110344" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+If you would like more details of Metropolis-Hastings a presentation of the same material but concentrating on the theory not the coding from our Applied Bayesian Econometrics course can be found [here for the MH algorithm](https://vimeo.com/442729179) and [here for Bayesian DSGE estimation](https://vimeo.com/442768310).
+
+- Text modelling of sentiment
+<center>
+<iframe src="https://player.vimeo.com/video/465914518" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+- Parts-of-speech, and network graphs
+<center>
+<iframe src="https://player.vimeo.com/video/465929139" width="640" height="564" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+There is an addtional presentation (not recorded) on topic modelling.
+
+
+### Webinar 3:2
+
+Coding workshop and close
+
+#### Coding workshop recording
+
+Features Laurie the Dog who didn't appreciate being left alone for a whole ten minutes....
+
+<center>
+<iframe src="https://attendee.gotowebinar.com/recording/2858991226632129027" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
+</center>
+
+The two books referred to at the end are Gelman et al. as mentioned above (published by CUP, and see http://www.stat.columbia.edu/~gelman/regression for additional material), and Richard Macelreath's _Statistical Rethinking_ (2nd ed), which has it's own GitHub https://github.com/rmcelreath/rethinking).

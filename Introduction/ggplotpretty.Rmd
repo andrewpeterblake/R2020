@@ -1,0 +1,153 @@
+---
+title: "ggplot2 basics"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+bibliography: refsBayes.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=10, fig.align="center")
+```
+
+> _The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+## ggplot2
+
+- Key part of the [`tidyverse`](https://www.tidyverse.org/) -- for many [the only part](https://en.wikipedia.org/wiki/ggplot2)
+- Builds a **g**rammar of **g**raphics
+- Simple rules that drive you mad until you get it
+- Process
+    - Initiate a plot using `ggplot`
+    - Specify **aesthetics** which indicate _what_ you want to plot
+    - Call a `geom` to say _how_ you want to plot it
+    - Add modifiers to change how it _looks_
+
+## Example
+
+- Take the Wooldridge data set `approval` from @Approval
+- Do a little wrangling  
+- Produce some quite nice plots  
+
+Start with libraries and retrieve data. 
+```{r message=FALSE, warning=FALSE}
+library(tidyverse)
+library(wooldridge)
+data("approval")
+```
+
+This looks like:  
+```{r app}
+head(approval) 
+```
+
+### Scatter plot
+
+A first scatter plot, using `geom_point` of food against gas (petrol) prices
+```{r p1}
+ggplot(approval, aes(x=lcpifood, y=lrgasprice)) +    # Initiate, set aesthetics
+  geom_point()                                       # Display as points
+```
+
+OK, I guess, a bit dull -- so I add some colour. This time I specify `aes` in the `geom` - either is fine, some advantages either way.
+```{r p2}
+
+ggplot(approval) +
+  geom_point(aes(x=lcpifood, y=lrgasprice, color=month))  # Colours by month
+```
+
+Better, but how about...
+
+```{r p2a}
+ggplot(approval) +
+  geom_point(aes(x=lcpifood, y=lrgasprice, color=approve), size=2, shape=17) + # Colours by popularity!
+  scale_color_gradient(low="red", high="green") 
+
+```
+
+A categorical variable (a _factor_) is needed to get different actual colours, otherwise for a continuous variable I get shades of one color or a continuous change.
+```{r p3}
+ggplot(approval) +
+  geom_point(aes(x=lcpifood, y=lrgasprice, color=as.factor(month), size=as.factor(year)))
+```
+
+### Time series plots
+
+Our time index is a bit odd as the data set has year and month separately.  Create a proper date series using:
+```{r}
+approval %<>% 
+  unite(date, year, month, sep="/") %>% 
+  mutate(date = as.Date(paste0(date,"/01"), "%Y/%m/%d"))
+```
+
+I've used the `%<>%` pipe operator to send and get back `approval` so this is now
+```{r echo=FALSE}
+head(approval) 
+```
+
+Then I can plot a couple of series using two calls to `geom_line`  
+```{r}
+ggplot(approval) +
+  geom_line(aes(x=date, y=unemploy), colour="red") +
+  geom_line(aes(x=date, y=cpi), colour="blue") 
+```
+
+But this is pretty inefficient, as I would need a call to `geom_line` for every series I wanted to plot and even then scales are unsuitable. Plus the labels are not right. 
+
+This is where things really get interesting. I `pivot_longer` all the variables into a single column.
+```{r}
+df <- pivot_longer(approval, cols=-c(date, id), names_to= "Var", values_to = "Val")
+head(df)
+```
+
+Great! Now I can plot `Val` using one call to `geom_line`. This time, put the graph object into `p` and then explicitly plot it.
+```{r}
+p  <- ggplot(df) +
+  geom_line(aes(x=date, y=Val))
+plot(p)
+```
+
+Oops! I need to tell `ggplot2` to separate out the variables which are stored in `Var`. For this, use `group`.
+```{r}
+p  <- ggplot(df) +
+  geom_line(aes(x=date, y=Val, group=Var, colour=Var))
+plot(p)
+```
+
+OK, but can I plot them so we can see what's going on, like in a grid? This is where `facet` comes in.
+```{r}
+p  <- p +
+  facet_wrap(~Var, scales = "free")
+plot(p)
+```
+
+A bit more formatting...  
+```{r}
+p  <- p +
+  theme_minimal() + 
+  labs(title="Facet plots", x="", y="")
+plot(p)
+```
+
+Finally all in one go, dropping the dummies, don't store as an object. Also no legend, as series labelled in the facets. And I call a rather handy little function `geom_smooth` which fits (by default) a Loess smoothing line.
+```{r message=FALSE}
+
+approval %>% 
+  select(-iraqinvade, -katrina, -X11.Sep) %>%
+  pivot_longer(cols=-c(date, id), names_to="Var", values_to="Val") %>%
+  ggplot(aes(x=date, y=Val, group=Var, colour=Var)) +
+  geom_line() +
+  geom_smooth() + # Smoother
+  facet_wrap(~Var, scales = "free") +
+  theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(title="Facet plots", x="", y="")
+
+```
+
+Cool, huh?
+
+## References

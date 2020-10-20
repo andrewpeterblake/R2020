@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601986929366.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "2520351752",
+    "id" : "C964A616",
+    "lastKnownWriteTime" : 1601065271,
+    "last_content_update" : 1601065271,
+    "path" : "C:/Users/145607/Desktop/R_course_2020/Day 1/Fanspretty.Rmd",
+    "project_path" : "Fanspretty.Rmd",
+    "properties" : {
+        "cursorPosition" : "203,26",
+        "scrollLine" : "202"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 6,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

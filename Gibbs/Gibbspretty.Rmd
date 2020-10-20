@@ -1,0 +1,449 @@
+---
+title: "Gibbs Sampling"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align='center')
+```
+
+> _The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+-------
+
+## Gibbs sampling in a table
+
+- Thinks about a the joint density of some parameters of interest for a discrete distribution
+```{r warning=FALSE}
+library(knitr)
+library(kableExtra)
+p <- matrix(c(0.1, 0.2, 0.3, 0.1, 0.05, 0.05, 0.05, 0.1, 0.05),
+            3, 3, byrow = TRUE)
+p <- cbind(p, rowSums(p))
+p <- as.data.frame(rbind(p, colSums(p)))
+colnames(p) <- c("$\\sigma_1$","$\\sigma_2$","$\\sigma_3$","Marginal $\\beta$")
+rownames(p) <- c("$\\beta_1$","$\\beta_2$","$\\beta_3$","Marginal $\\sigma$")
+kable(p, escape = FALSE, align="c") %>%
+  kable_styling(full_width = F) %>%
+  column_spec(2:4, background = "pink") %>%
+  column_spec(5, background = "wheat") %>%
+  row_spec(4, background = "wheat") %>%
+  column_spec(1, background = "white")
+```
+- For this discrete example, the sums across the columns and rows are the **marginal** densities for the parameters: they don't depend on the other parameter
+- Gibbs sampling estimates these sums by constructing sequences from the **conditional** densities that have the right joint density
+ 
+## Gibbs Sampling
+
+- Suppose there are $k$ variables $\phi_i$ jointly distributed
+$$
+   J(\phi_1,\phi_2,...,\phi_k)
+$$
+- For inferential purposes we are interested in the marginal distributions denoted
+$$
+    G(\phi_i),\quad i=1,...,k
+$$
+
+- Gibbs sampling is a technique that generates a sequence of values that have the same distribution as the underlying marginals
+- It doesn't use the joint density but instead a sequence of conditionals densities
+$$
+    H(\phi_i|\Phi_{j\ne i}),\quad i=1,...,k
+$$
+where $\Phi_{j\ne i}$ are all other parameters
+- We will look at the procedure first and then at how it works in an example
+
+### Gibbs sampling is the following steps
+ 
+- **Step 0** Set starting values for $\phi_1,...,\phi_k$
+$$
+    \phi_1^0,\ \phi_2^0,\ ...,\ \phi_k^0
+$$
+
+- **Step 1** Sample $\phi_1^1$ from
+$$
+     H(\phi_1^1\ |\ \phi_2^0,\ \phi_3^0,\ ...,\ \phi_k^0) 
+$$
+
+- **Step 2** Sample $\phi_2^1$ from
+$$    
+    \begin{gather*}
+    H(\phi_2^1\ |\ \phi_1^1,\ \phi_3^0,\ ...,\ \phi_k^0)  \\
+    \vdots 
+    \end{gather*}
+$$    
+
+- **Step $k$** Sample $\phi_k^1$ from 
+$$
+    H(\phi_k^1\ |\ \phi_1^1,\ \phi_2^1,\ ...,\ \phi_{k-1}^1) 
+$$
+to complete one iteration
+
+- Repeat for $n$ iterations and save the last $n-p$ values of $\phi_i^j$ for every $i=1,...,k$
+- As $n \rightarrow \infty$ the joint and marginal distributions of the simulated $\phi_1^j,\ ...,\ \phi_k^j$ converge at an exponential rate to the joint and marginal distributions of $\phi_1,\ ...,\ \phi_k$
+- Then the joint and marginal distributions can be approximated by the empirical distribution
+    - For example, the estimated mean of the marginal distribution of $\phi_i$ is
+$$
+   \bar \phi_i = \frac{\sum_{j=p+1}^n \phi_i^j}{n-p}
+$$
+where we discard the first $p$ draws
+ 
+## Example: linear regression model
+
+- For the specific linear model
+$$
+   y_t = \alpha + \beta_1 X_{1t} + \beta_2 X_{2t}+v_t\text{, }v_t\sim N(0,\sigma^2)
+$$
+
+- **Step 1** Set priors for $\sigma^2$ and $\beta=\{\alpha, \beta_1, \beta_2\}$
+$$
+P(\beta) \sim N\left( \underset{\beta_{0}}{\left[ 
+\begin{array}{c}
+  \alpha^0 \\ 
+  \beta_1^0 \\ 
+  \beta_2^0
+\end{array}
+\right],}\underset{\Sigma_0} {\left[ 
+\begin{array}{ccc}
+\Sigma_{\alpha} & 0 & 0 \\ 
+0 & \Sigma_{\beta_1} & 0 \\ 
+0 & 0 & \Sigma_{\beta_2}
+\end{array}
+\right] }\right)
+$$
+$$
+  P(\sigma^2) \sim \Gamma^{-1}\left( \frac{T_{0}}{2},\frac{\theta_0}{2}\right)
+$$
+and set starting values for e.g. $\alpha=\beta_1=\beta_2=0$, $\sigma^2=1$
+
+- **Step 2** Given $\sigma^2$ sample $\beta$ from its conditional posterior distribution
+$$
+ H(\beta|\sigma^2) \sim N(M^*, V^*)
+$$
+where
+$$
+\begin{align}
+M^* &= \left(\Sigma_0^{-1} + \frac{1}{\sigma^2} X'X\right)^{-1} \left(\Sigma_0^{-1} \beta_0+\frac{1}{\sigma^2}X'y\right)\\
+V^* &= \left(\Sigma_0^{-1}+\frac{1}{\sigma^2} X'X\right)^{-1}
+\end{align}
+$$
+and $X_t = \{\alpha, X_{1t}, X_{2t}\}$
+    - To sample a $k\times 1$ vector $b \sim N(M^*,V^*)$, generate $k$ numbers $z \sim N(0,1)$, scale by the square root of $V^*$ and add in the mean
+$$
+   b = M^* + \mbox{chol}(V^*) \times z
+$$
+where $E[(b-M^*)(b-M^*)'] = V^*$
+
+- **Step 3** Given a draw of $\beta$ (and call it $\beta^1$) draw $\sigma^2$ from its conditional distribution:
+$$
+ H(\sigma^2 | \beta) \sim \Gamma^{-1}\left( \frac{T_0+T}{2}, \frac{\theta_0 + (y-X\beta^1)'(y-X\beta^1)}{2}\right) 
+$$
+    - Sample some value $s$ from an Inverse Gamma distribution $\Gamma^{-1}(\frac{\tau}{2},\frac{\delta}{2})$, either from a suitable $\Gamma^{-1}$-distributed random number generator or generate $\tau$ standard Normal-distributed numbers $\varepsilon \sim N(0,1)$ and calculate
+$$
+  s = \frac{\delta}{\varepsilon'\varepsilon}
+$$
+    - Setting $\tau = T_0+T$ and $\delta = \theta_0 + e'e$ is directly the exact conditional posterior
+
+- **Step 4** Repeat Steps 2 and 3 $n$ times and compute the posterior means using the last $m$ draws (e.g. repeat 5000 times and save the last 1000 draws)
+
+## Estimating a model for US inflation
+
+```{r warning=FALSE, message=FALSE} 
+library(tidyverse)
+library(kableExtra)
+
+max_lag <- 4
+
+download.file("https://fred.stlouisfed.org/series/CPALTT01USQ661S/downloaddata/CPALTT01USQ661S.csv",
+              "CPI.csv")
+data <- readr::read_csv("CPI.csv")  %>% 
+  rename(Date=DATE, value=VALUE) %>% 
+  mutate(Vars = "INF", 
+         Vals = 100*(value/lag(value,4)-1),
+         lagi = list(0:max_lag)) %>%
+  slice(-c(1:4)) %>%
+  unnest(cols = c(lagi)) %>%
+  group_by(lagi) %>%
+  mutate(Vals = lag(Vals, lagi[1])) %>%
+  ungroup() %>%
+  mutate(Varl = paste(Vars, lagi, sep="_"), 
+         Vars = if_else(lagi==0, Vars, Varl)) %>%
+  select(Date,Vars,Vals) %>%
+  pivot_wider(names_from = Vars, values_from = Vals) %>%
+  slice(-c(1:max_lag)) %>%
+  mutate(constant = 1)
+ggplot(data) + 
+  geom_line(aes(x=Date, y=INF), colour="red") +
+  theme_minimal() +
+  labs(title="US inflation data", x="", y="")
+```
+
+- Choose an $AR(4)$
+$$
+   \pi_t = \alpha + \beta_1 \pi_{t-1} + \beta_2 \pi_{t-2} + \beta_3 \pi_{t-3} + \beta_4 \pi_{t-4} + v_t\text{, }v_t\sim N(0,\sigma^2)
+$$
+and write $\beta' = [\alpha\ \beta_1\ \beta_2\ \beta_3\ \beta_4]'$
+- Priors are
+$$
+P(\beta) \sim N\left( \underset{\beta_0} {\left[ 
+\begin{array}{c}
+  0 \\ 
+  1 \\ 
+  0 \\
+  0 \\ 
+  0
+\end{array}
+\right],}\ \underset{\Sigma} {\eta\left[ 
+\begin{array}{ccc}
+1 & 0 & 0 & 0 & 0\\ 
+0 & 1 & 0 & 0 & 0\\ 
+0 & 0 & 1 & 0 & 0\\
+0 & 0 & 0 & 1 & 0\\
+0 & 0 & 0 & 0 & 1
+\end{array}
+\right] }\right), \qquad
+  P(\sigma^2) \sim \Gamma^{-1}\left( \frac{1}{2},\frac{1}{2}\right)
+$$
+where $\eta$ is a scalar we will use to adjust prior tightness
+- Prior model consistent with a random walk for inflation
+
+```{r warning=FALSE, message=FALSE} 
+X <- data.matrix(select(data, -Date, -INF))
+Y <- data.matrix(select(data, INF))
+T <- nrow(Y)
+
+# Save for later use
+XX      <- crossprod(X)
+XY      <- crossprod(X,Y)
+iXX     <- chol2inv(chol(XX))
+
+# Standard OLS
+betahat <- iXX %*% XY
+eta     <- Y - X %*% betahat
+se      <- sum(eta^2)/(T-max_lag-1)
+seb     <- sqrt(diag(iXX)*se)
+res     <- tibble(Coefficient = c(names(data)[-(1:2)], "sigma"),
+                  Estimate    = c(betahat, sqrt(se)), 
+                  SE          = c(seb, NA), 
+                  `t-stat`    = c(betahat/seb, NA)) 
+
+kable(res, digits=3, caption="Regression results", booktabs=TRUE) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+#### OLS regression, no prior information
+
+### Gibbs samples
+
+```{r warning=FALSE, message=FALSE} 
+# Set priors and starting values
+# priors for B
+B0     <- matrix(c(1, rep(0, max_lag)),max_lag+1,1)
+Sigma0 <- diag(max_lag+1)/1
+# priors for sigma2
+T0     <- 1L
+D0     <- .1
+# starting value for sigma2
+sigma2 <- 1L
+
+# Create matrices for repeated use
+iS0   <- chol2inv(chol(Sigma0))
+const <- matrix(0, max_lag, 1)
+BB    <- matrix(c(1, rep(0, max_lag-1)), max_lag, 1)
+
+# Parameters of/storage for Gibbs samples
+reps <- 5000 # total numbers of Gibbs iterations
+burn <- 3000  # number of burn-in iterations
+out  <- matrix(0,reps-burn,max_lag+2)
+
+for (i in 1:reps) {
+  
+  V <- chol2inv(chol(XX/sigma2 + iS0))
+  M <- V %*% (XY/sigma2 + iS0 %*% B0)
+  
+  eigs <- 2
+  while(max(abs(eigs)) > 1) {
+    b    <- M + chol(V) %*% rnorm(max_lag+1)
+    A    <- rbind(t(head(b, max_lag)), diag(1,max_lag-1,max_lag))
+    eigs <- eigen(A, symmetric=FALSE, only.values=TRUE)$values
+    }
+  
+  # sample sigma2 conditional on b from IG(T0,D0);
+  e      <- Y - X%*%b
+  sigma2 <- (D0 + sum(e^2))/sum(rnorm(T0+T)^2)
+  
+  if (i > burn) out[i-burn,] <- c(t(b), sigma2)  
+
+}
+
+# Rearrange output
+ddens <- as_tibble(out) %>%
+  rename_all( ~ c(paste0("beta[",1:max_lag,"]"), "alpha", "sigma")) %>%
+  mutate(iter=1:(reps-burn)) %>%
+  pivot_longer(names_to = "par", values_to = "val", cols = -iter)
+
+# Plot sequences
+sdens <- ggplot(ddens) + 
+  geom_line(aes(x=iter, y=val, group=par, colour=par), show.legend=FALSE) +
+  facet_wrap(~par, labeller=label_parsed, ncol=2, scales="free") +
+  theme_minimal() + 
+  labs(title="Sequences", x="", y="")
+plot(sdens)
+``` 
+
+#### Sample output for 2000 replications, long burn in
+
+```{r warning=FALSE, message=FALSE}
+ddens %>% 
+  rename(Parameter = par) %>%
+  group_by(Parameter) %>% 
+  summarise(Expected = mean(val), 
+            SE       = sd(val), 
+            lower_5  = quantile(val, 0.05), 
+            upper_95 = quantile(val, 0.95)) %>% 
+  kable(digits=3, caption="Bayesian estimates", booktabs=TRUE) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+#### Calculate descriptive statistics from Gibbs Samples
+
+```{r warning=FALSE, message=FALSE} 
+# Plot estimated densities
+pdens <- ggplot(ddens) + 
+  geom_histogram(aes(x=val, y=..density.., group=par, fill=par), alpha=0.33, bins=75) +
+  geom_density(aes(x=val, group=par, colour=par)) +
+  facet_wrap(~par, labeller=label_parsed, ncol=2, scales="free", strip.position="top") +
+  theme_minimal() +
+  theme(legend.position="none") + 
+  labs(title="Histograms and kernel-smoothed estimated densities", x="", y="")
+plot(pdens)
+``` 
+
+#### Gibbs sampling generates estimates of the full marginal distributions of the parameters
+
+- We can look at the impact of tighter priors and more samples
+- What should we expect?
+    - More samples will generate smoother-looking density plots, increase precison (maybe not by as much as you think)
+    - Tighter priors will move estimates towards the prior: we can, say, reduce $\eta$ or increase degrees of freedom for $\sigma$
+
+```{r warning=FALSE, message=FALSE, echo=FALSE} 
+# Set priors and starting values
+# priors for B
+B0     <- matrix(c(1, rep(0, max_lag)),max_lag+1,1)
+Sigma0 <- diag(max_lag+1)/1
+# priors for sigma2
+T0     <- 1L
+D0     <- .1
+# starting value for sigma2
+sigma2 <- 1L
+
+# Create matrices for repeated use
+iS0   <- chol2inv(chol(Sigma0))
+const <- matrix(0, max_lag, 1)
+BB    <- matrix(c(1, rep(0, max_lag-1)), max_lag, 1)
+
+# Parameters of/storage for Gibbs samples
+reps <- 10000 # total numbers of Gibbs iterations
+burn <-  3000  # number of burn-in iterations
+out  <- matrix(0,reps-burn,max_lag+2)
+
+for (i in 1:reps) {
+  
+  V <- chol2inv(chol(XX/sigma2 + iS0))
+  M <- V %*% (XY/sigma2 + iS0 %*% B0)
+  
+  eigs <- 2
+  while(max(abs(eigs)) > 1) {
+    b    <- M + chol(V) %*% rnorm(max_lag+1)
+    A    <- rbind(t(head(b, max_lag)), diag(1,max_lag-1,max_lag))
+    eigs <- eigen(A, symmetric=FALSE, only.values=TRUE)$values
+    }
+  
+  # sample sigma2 conditional on b from IG(T0,D0);
+  e      <- Y - X%*%b
+  sigma2 <- (D0 + sum(e^2))/sum(rnorm(T0+T)^2)
+  
+  if (i > burn) out[i-burn,] <- c(t(b), sigma2)  
+
+}
+
+# Rearrange output
+ddens <- as_tibble(out) %>%
+  rename_all( ~ c(paste0("beta[",1:max_lag,"]"), "alpha", "sigma")) %>%
+  mutate(iter=1:(reps-burn)) %>%
+  pivot_longer(names_to = "par", values_to = "val", cols = -iter)
+
+# Plot estimated densities
+pdens <- ggplot(ddens) + 
+  geom_histogram(aes(x=val, y=..density.., group=par, fill=par), alpha=0.33, bins=75) +
+  geom_density(aes(x=val, group=par, colour=par)) +
+  facet_wrap(~par, labeller=label_parsed, ncol=2, scales="free", strip.position="top") +
+  theme_minimal() +
+  theme(legend.position="none") + 
+  labs(title="Histograms and kernel-smoothed estimated densities", x="", y="")
+plot(pdens)
+``` 
+
+#### Histograms/density estimates for 7000 replications, long burn in
+
+```{r warning=FALSE, message=FALSE, echo=FALSE} 
+# Set priors and starting values
+# priors for B
+B0     <- matrix(c(1, rep(0, max_lag)),max_lag+1,1)
+Sigma0 <- diag(max_lag+1)*.025
+# priors for sigma2
+T0     <- 1L
+D0     <- .1
+# starting value for sigma2
+sigma2 <- 1L
+
+# Create matrices for repeated use
+iS0   <- chol2inv(chol(Sigma0))
+const <- matrix(0, max_lag, 1)
+BB    <- matrix(c(1, rep(0, max_lag-1)), max_lag, 1)
+
+# Parameters of/storage for Gibbs samples
+reps <- 10000 # total numbers of Gibbs iterations
+burn <-  3000 # number of burn-in iterations
+out  <- matrix(0,reps-burn,max_lag+2)
+
+for (i in 1:reps) {
+  
+  V <- chol2inv(chol(XX/sigma2 + iS0))
+  M <- V %*% (XY/sigma2 + iS0 %*% B0)
+  
+  eigs <- 2
+  while(max(abs(eigs)) > 1) {
+    b    <- M + chol(V) %*% rnorm(max_lag+1)
+    A    <- rbind(t(head(b, max_lag)), diag(1,max_lag-1,max_lag))
+    eigs <- eigen(A, symmetric=FALSE, only.values=TRUE)$values
+    }
+  
+  # sample sigma2 conditional on b from IG(T0,D0);
+  e      <- Y - X%*%b
+  sigma2 <- (D0 + sum(e^2))/sum(rnorm(T0+T)^2)
+  
+  if (i > burn) out[i-burn,] <- c(t(b), sigma2)  }
+
+# Rearrange output
+ddens <- as_tibble(out) %>%
+  rename_all( ~ c(paste0("beta[",1:max_lag,"]"), "alpha", "sigma")) %>%
+  mutate(iter=1:(reps-burn)) %>%
+  pivot_longer(names_to = "par", values_to = "val", cols = -iter)
+
+# Plot estimated densities
+pdens <- ggplot(ddens) + 
+  geom_histogram(aes(x=val, y=..density.., group=par, fill=par), alpha=0.33, bins=75) +
+  geom_density(aes(x=val, group=par, colour=par)) +
+  facet_wrap(~par, labeller=label_parsed, ncol=2, scales="free", strip.position="top") +
+  theme_minimal() +
+  theme(legend.position="none") + 
+  labs(title="Histograms and kernel-smoothed estimated densities", x="", y="")
+plot(pdens)
+``` 
+
+#### Histograms/density estimates for 7000 samples, $\eta=.025$, long burn in

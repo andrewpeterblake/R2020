@@ -1,0 +1,168 @@
+---
+title: "Simple Diff-in-diff regressions in R"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, fig.align = "center")
+```
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+--------
+
+# Pooled Cross Sections Over Time
+
+- Consider a random sample from a population, for example on household expenditures.
+- This could be used to look at the link between income and consumption.
+- Suppose we have independent random samples from this population at different points in time.
+- If we combine these datasets into one, we have a **pooled cross section**.
+- A benefit of doing this is that it increases the sample size.
+- But the population we're sampling from could have changed over time and we need to account for that.
+- In fact, pooled cross-sections can be used to test for a change in such relationships.
+
+# Model
+
+- Consider the following economic relationship in the population
+$$
+   y = \beta_0 + \beta_1 x + u
+$$
+- Suppose we have random samples from this in two years, say 1990 and 1995.
+- Construct a dummy variable $D_{1995}$ where $D_{1995}=1$ if the year is 1995 and 0 for 1990.
+- We can then test whether there are changes in the coefficients over time by running
+$$
+   y = \beta_0 + \gamma_0 D_{1995} + \beta_1 x + \gamma_1 D_{1995} x + u
+$$
+- In this model the estimated intercept in 1990 is $\beta_0$ whilst the estimated intercept in 1995 is $\beta_0+\gamma_0$.
+- Testing whether $\gamma_0=0$ then tests whether the intercept has changed over time.
+- Similarly, the estimated coefficient on $x$ is $\beta_1$ in 1990 and $\beta_1+\gamma_1$ in 1995.
+- A test on $\gamma_1$ will reveal if there has been a change in the relationship between $y$ and $x$ over time.
+
+# Difference in Differences
+
+- There are sometimes exogenous events which split observations into treatment and control groups.
+- Such scenarios are called **natural experiments**.
+- A change in tax rates is a typical example.
+- The natural experiment can be used to examine the impact of the policy.
+- There may be systematic difference between the treatment and control groups (e.g. wealthier individuals are the ones affected by a tax change).
+- Pooled cross sectional data be used to estimate the impact of the policy in this case.
+- The idea is to compare the differences between the treated and control group, before and after the change.
+- This gives rise to the **difference in differences** estimate of effects.
+- For this to be valid, the unobserved differences between the treatment and control groups that are unrelated to the policy change must be common over time, so-called **parallel trends**.
+- To illustrate this suppose we have pooled cross-section data with
+    - Two time periods: 1,2.
+    - Two groups: $A$ and $B$, where $A$ is the control group and $B$ is the treated group.
+    - Let $D_2$ be a dummy variable taking value $1$ for $t=2$ and 0 for $t=1$.
+    - Let $D_B$ be a dummy variable taking value $1$ for group $B$ and value 0 for group $A$.
+- We estimate the following regression model
+$$
+  y = \beta_0 + \beta_1 D_B + \delta_0 D_2 + \delta_1 D_B D_2 + u
+$$
+- Then the values of $y$ for each group are as follows:
+    - Group $A$, time 1: $\beta_0$
+    - Group $B$, time 1: $\beta_0 + \beta_1$ 
+    - Group $A$, time 2: $\beta_0 + \delta_0$
+    - Group $B$, time 2: $\beta_0 + \beta_1 + \delta_0 + \delta_1$
+- The coefficient $\beta_1$ allows for systematic differences between groups $A$ and $B$ 
+- The coefficient $\delta_0$ allows for other changes over the same period that affect both groups $A$ and $B$ in the same way
+- The change in $A$ over time is captured by $\delta_0$ 
+- The change in $B$ over time is captured by $\delta_0+\delta_1$
+- Thus $\delta_1$ captures the difference between the change in $B$ and the change in $A$
+- The OLS estimator in this regression is the **difference-in-differences estimator**:
+$$
+\hat{\delta}_1 = (\bar{y}_{2,B}-\bar{y}_{1,B}) - (\bar{y}_{2,A}-\bar{y}_{1,A})
+$$
+- Equivalently
+$$
+  \hat{\delta}_1 = (\bar{y}_{2,B}-\bar{y}_{2,A}) - (\bar{y}_{1,B}-\bar{y}_{1,A})
+$$
+
+# Example: Difference in Differences
+
+- An example of such a natural experiment is studied by Kiel and McClain (1995)
+- They examine the impact that a new garbage incinerator had on house prices in Massachusetts
+- Data on house prices can be compared
+    - Before the incinerator was announced: $1978$
+    - After the incinerator was announced: $1981$
+- Moreover, house prices can be compared for
+    - Houses far from the incinerator (control group)
+    - Houses near the incinerator (treated group)
+- Wooldridge (section 13.2)
+
+## Numbers
+
+- Load the necessary libraries
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+library(dplyr)       # We will filter the data
+library(wooldridge)  # All Wooldridge datasets
+
+data("kielmc")
+```
+
+- A simple (and wrong) approach would be to use the 1981 data to run a regression of house prices on a dummy $near$, which is 1 when a house is near the incinerator
+
+$$
+  price=\gamma_0 + \gamma_1 near + u
+$$
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+eq1981 <- lm(rprice ~ nearinc, data=filter(kielmc, year==1981))
+t1981  <- summary(eq1981)
+```
+- This gives the result `r coef(eq1981)["nearinc"]` so the conclusion might be that in 1981 houses near the incinerator were worth almost $\$31$ thousand less on average  
+- But this does **not** imply the causal difference is due to the incinerator: there could be systematic differences between the areas  
+- Indeed, running the same regression on 1978 data gives  
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+eq1978 <- lm(rprice ~ nearinc, data=filter(kielmc, year==1978))
+t1978  <- summary(eq1978)
+```  
+- This suggests houses near the incinerator were worth `r abs(coef(eq1978)["nearinc"])` less even before it was built!  
+- Actually this suggests that the incinerator was built in an area with lower value houses.
+- The key to estimating the difference in housing values caused by the incinerator is to look at the difference in these differences over time
+$$
+\left(\overline{price}_{81,near}-\overline{price}_{81,far}\right)-\left(\overline{price}_{78,near}-\overline{price}_{78,far}\right)
+$$
+or 
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+coef(eq1981)["nearinc"] - coef(eq1978)["nearinc"]
+```
+- Thus, difference in differences estimates that the incinerator caused nearby houses to fall in value by about $\$12000$.
+- A maintained assumption is that houses near and far from the incinerator didn't appreciate at differential rates over the period due to other reasons  
+- When we have more time periods we can test whether house prices in the two groups had **parallel trends** prior to the incinerator being built.
+  
+# Estimating directly
+
+- This is just the diff-in-diff estimate.
+- Instead we now run a single regression where we **interact** the dummies
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+eqdid  <- lm(rprice ~ y81 + nearinc + y81*nearinc, data=kielmc)
+summary(eqdid)
+```
+- This confirms the same value `r coef(eqdid)["y81:nearinc"]`.
+- The only problem here is that we don't have significance.
+- Add more controls!
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+eqdid2  <- lm(rprice ~ y81 + nearinc + y81*nearinc + age + agesq, data=kielmc)
+summary(eqdid2)
+```
+- Now the estimate is `r coef(eqdid2)["y81:nearinc"]`, even more negative.
+- But `nearinc` is now insignificant...   
+- Add more controls!
+```{r message=FALSE, warning=FALSE, echo=TRUE}
+seqdid3 <- lm(rprice ~ y81 + nearinc + y81*nearinc + age + agesq + intst + land + area + rooms + baths, data=kielmc)
+```
+- This time, extract some statistics directly  
+```{r echo=TRUE}
+broom::glance(seqdid3)
+cval <- coef(seqdid3)["y81:nearinc"]
+vval <- sqrt(vcov(seqdid3)["y81:nearinc","y81:nearinc"])
+
+y81nearinc <- matrix(c(cval, vval, abs(cval/vval)),1,3)
+colnames(y81nearinc) <- c("Coef.", "Std Err", "t-value")
+y81nearinc
+```
+- A smaller effect again, but a substantially improved $R^2$, it never ends...

@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601980258352.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "2240167773",
+    "id" : "C2D77C51",
+    "lastKnownWriteTime" : 1601996618,
+    "last_content_update" : 1601996618266,
+    "path" : "C:/Users/145607/Desktop/R_course_2020/Day 1/Regression.R",
+    "project_path" : "Regression.R",
+    "properties" : {
+        "cursorPosition" : "61,0",
+        "scrollLine" : "50"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 4,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

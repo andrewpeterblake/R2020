@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601975009937.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "1192812563",
+    "id" : "AE5947E5",
+    "lastKnownWriteTime" : 1601924243,
+    "last_content_update" : 1601924243,
+    "path" : "C:/Users/145607/Desktop/R_course_2020/Day 1/Regression.Rmd",
+    "project_path" : "Regression.Rmd",
+    "properties" : {
+        "cursorPosition" : "7,21",
+        "scrollLine" : "0"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

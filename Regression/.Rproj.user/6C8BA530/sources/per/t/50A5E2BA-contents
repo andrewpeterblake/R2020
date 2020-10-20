@@ -1,0 +1,240 @@
+---
+title: "Endogeneity"
+output: 
+  learnr::tutorial:
+    progressive: true
+    allow_skip: true
+    df_print: default
+runtime: shiny_prerendered
+---
+
+```{r setup, include=FALSE}
+library(learnr)
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+## Exercises from Wooldridge
+
+### Data
+
+All exercises are taken from _Introductory Econometrics_, by Jeffrey Wooldridge.
+
+This implementation is designed to replicate EViews output. Luckily in R we have a library with all the data in it (`wooldridge`). We will also use the `AER` library, so we load both of these and the `tidyverse` which we may like to use.
+
+```{r init, echo=TRUE, warning=FALSE, message=FALSE}
+library(wooldridge)
+library(AER)
+library(tidyverse)
+```
+
+OLS regressions can be coded in the form 
+$$
+  y = \beta_0 + \beta_1 x + \beta_2 w + u
+$$
+will use code such as `lm("y ~ x + w", data=<Data frame>)`. The regression includes a constant by default. 
+
+An IV estimate uses the `ivreg("y ~ x + w | w + z", data=<Data frame>)` to estimate an equation where `x` is instrumented using `w`.
+
+## Exercise 15.12
+
+We use the data in `WAGE2` for this exercise to estimate the return to education for men. 
+
+```{r wage2, echo=TRUE, warning=FALSE, message=FALSE}
+data("wage2")
+```
+
+Consider the regression 
+$$
+  \log(wage) = \beta_0 + \beta_1 educ + u
+$$
+where wage is monthly earnings and educ is years of education.
+
+### Question i.
+
+> Estimate this equation using `sibs` as an instrument for `educ`, where `sibs` is the number of siblings. To convince yourself that using `sibs` as an IV for `educ` is not the same as just plugging `sibs` in for `educ` and running an OLS regression, run the regression of log(`wage`) on `sibs` and explain your findings. 
+
+To estimate using IV, we need the `ivreg`.
+
+Write the necessary R code here:
+```{r IV1, exercise=TRUE, exercise.lines = 4}
+wage.iv <- 
+summary(wage.iv)
+```
+
+```{r IV1-solution}
+wage.iv  <- ivreg("lwage ~ educ | . - educ + sibs", data=wage2)
+```
+
+For the second part we now run an OLS regression of `lwage` on `sibs` (and a constant. Write the code to do this in this box:
+```{r OLS, exercise=TRUE, exercise.lines = 3}
+wage.ols  <- 
+summary(wage.ols)
+```
+
+```{r OLS-solution}
+wage.ols <- lm("lwage ~ sibs", data=wage2)
+```
+
+### Question ii.
+
+> The variable `brthord` is birth order (1 for a first-born child, 2 for a second-born child, and so on). Explain why `educ` and `brthord` might be negatively correlated. Regress `educ` on `brthord` to determine whether there is a statistically significant negative correlation.
+
+```{r BRTH, exercise=TRUE, exercise.lines = 3}
+brth.ols <- lm("educ ~ brthord", data=wage2)
+summary(brth.ols)
+```
+
+### Question iii.
+
+> Use `brthord` as an IV for `educ` in the above equation. Report and interpret the results.
+
+```{r IBRTH, exercise=TRUE, exercise.lines = 3}
+brth.IV <- ivreg("lwage ~ educ | . - educ + brthord", data=wage2)
+summary(brth.IV)
+```
+
+### Question iv.
+
+> Now suppose that we include the number of siblings as an explanatory variable in the wage equation; this controls for family background, to some extent:
+$$
+  log(wage) = \beta_0 + \beta_1 educ + \beta_2 sibs + u
+$$
+Suppose that we want to use `brthord` as an IV for `educ`, assuming that `sibs` is exogenous. The reduced form for `educ` is
+$$
+  educ = \pi_0 + \pi_1 sibs + \pi_2 brthord + u
+$$
+State and test the identification assumption.
+
+The identification assumption is that the excluded exogenous variable (`brthord`) has relevance for the endogenous variable (`educ`) having controlled for the included exogenous variable (`sibs`). In short, the relevance assumption is: $\pi_2 = 0$. Type in the missing code for this here:
+
+```{r TSLS1, exercise=TRUE, exercise.lines = 3}
+TSLS1 <-
+summary(TSLS1)
+```
+
+```{r TSLS1-solution, exercise=TRUE, exercise.lines = 3}
+TSLS1 <- lm("educ ~ sibs + brthord", data=wage2)
+summary(TSLS1)
+```
+
+```{r TSLS1x, exercise=FALSE}
+TSLS1 <- lm("educ ~ sibs + brthord", data=wage2)
+```
+
+(Spoiler: It isn't.)
+
+### Question v.
+
+> Estimate the equation from Question iv using brthord as an IV for educ (and sibs as its own IV). Comment on the standard errors for $\hat\beta_1$ and $\hat\beta_2$.
+
+```{r TSLS2, exercise=TRUE, exercise.lines = 3}
+TSLS2 <- ivreg("lwage ~ educ + sibs | . - educ + brthord", data=wage2)
+summary(TSLS2)
+```
+
+### Question vi.
+
+> Using the fitted values from Question iv, compute the correlation between $\hat{educ}$ and $sibs$. Use this result to explain your findings from Question v.
+
+This means we need to pick up the predicted values from `TSLS1` and the correct values of `sibs`.
+```{r COR, exercise=TRUE, exercise.lines=8, message=FALSE, warning=FALSE}
+educ_hat <- predict(TSLS1)
+sibs     <- wage2  %>% 
+  select(lwage, brthord, educ, sibs) %>%
+  filter(complete.cases(.)) %>%
+  select(sibs)
+cor(educ_hat,sibs)
+```
+
+## Exercise 15.13
+
+The data in `FERTIL2` includes, for women in Botswana during 1988, information on number of children, years of education, age, and religious and economic status variables.
+
+
+```{r fertil2, echo=TRUE, warning=FALSE, message=FALSE}
+data("fertil2")
+```
+
+### Question i. 
+
+> Estimate this model by OLS
+$$
+  children = \beta_0 educ + beta_1 educ + \beta_2 age + \beta_3 age^2 + u
+$$
+and interpret the estimates. In particular, holding age fixed, what is the estimated effect of another year of education on fertility? If 100 women receive another year of education, how many fewer children are they expected to have?
+
+First find out what the variables are called
+```{r called}
+names(fertil2)
+
+```
+
+Now run the regression
+```{r Children, exercise=TRUE, exercise.eval=FALSE}
+child.ols <- 
+summary(child.ols)
+```
+
+```{r Children-solution}
+lm("children ~ educ + age + agesq", data = fertil2)
+```
+
+### Question ii. 
+
+> `Frsthalf` is a dummy variable equal to one if the woman was born during the first six months of the year. Assuming that `frsthalf` is uncorrelated with the error term from Question i, show that `frsthalf` is a reasonable IV candidate for `educ`. (Hint: you need to do a regression.)
+
+```{r IVC, exercise=TRUE, exercise.eval=FALSE}
+summary(lm("educ ~ frsthalf + age + agesq", data = fertil2))
+```
+
+### Question iii.
+
+> Estimate the model from Question i by using `frsthalf` as an IV for `educ`. Compare the estimated effect of education with the OLS estimate from Question i.
+
+## Exercise 15.14
+
+Use the data in `CARD` for this exercise. Load data and print out names.
+```{r card, echo=TRUE, warning=FALSE, message=FALSE}
+data("card")
+names(card)
+```
+
+Consider the following returns to education model:
+$$
+  \log(wage) = \beta_0 + \beta_1 educ + \beta_2 exper + \beta_3 exper^2 + \beta_4 black + \beta_5 smsa + \beta_6 south + u
+$$
+where `wage` is the hourly wage in cents, `educ` is years of schooling, `exper` is years of work experience, `black` is a dummy variable for being black, `smsa` is a dummy for living in a metropolitan area, and `south` is a dummy for living in the south.
+
+### Question i. 
+
+> A potential instrument for `educ` is `nearc4`, a dummy variable for growing up near a four year college. In order for this IV to be consistent, `nearc4` must be uncorrelated with `u`. Could `nearc4` be correlated with things in the error term, such as unobserved ability? Explain.
+
+Four year colleges are not randomly distributed geographically. It could be that there are more colleges in more affluent areas, and these areas also attract individuals with higher availability-their children could also then have higher ability.
+
+### Question ii. 
+
+> For a subsample of the men in the data set, an IQ score is available. Regress `IQ` on `nearc4` to check whether average IQ scores vary by whether the man grew up near a four-year college. What do you conclude?
+
+```{r IQ, exercise=TRUE, exercise.eval=FALSE}
+summary(lm("IQ ~ nearc4", data = card))
+```
+
+### Question iii. 
+
+> Now, regress `IQ` on `nearc4`, `smsa66` (a dummy for whether the man lived in `smsa` in 1966), and the 1966 regional dummy variables `reg662`,... ,`reg669` (these record which of the nine US
+regions the man lived in in 1966). Are `IQ` and `nearc4` related after the geographic dummy variables have been partialled out? Reconcile this with your findings from Question ii.
+
+```{r IQ2, exercise=TRUE, exercise.eval=FALSE}
+
+
+```
+
+```{r IQ2-solution}
+summary(lm("IQ ~ nearc4 + smsa66 + reg662 + reg663 + reg664 + reg665 + reg666 + reg667 + reg668 + reg669", data = card))
+```
+
+### Question iv. 
+
+> From Questions ii and iii, what do you conclude about the importance of controlling for `smsa66` and the 1966 regional dummies in the $\log(wage)$ equation?
+
+The findings show the importance of controlling for geographic differences in access to nearby colleges that may also be correlated with ability.

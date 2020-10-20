@@ -1,0 +1,210 @@
+---
+title: "lm, ivreg, plm, clustering"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, fig.align = "center")
+```
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+--------
+
+## Libraries
+
+A short tour of available standard econometric methods. There are many more....
+
+```{r libs, warning=FALSE, message=FALSE}
+library(tidyverse)   # Tidy packages
+library(tidymodels)
+library(lubridate)
+
+library(plm)         # Panel econometrics package
+library(AER)         # Applied Econometrics in R
+library(wooldridge)  # Data
+```
+
+## Simple regression
+
+The `rental` data are described as 
+
+> Wooldridge Source: David Harvey, a former MSU undergraduate, collected the data for 64 “college towns” from the 1980 and 1990 United States censuses.
+
+These are going to be terrible regressions.... A quick look at some of the data:
+```{r data}
+data("rental")
+
+knitr::kable(head(rental[,1:8], 6), 
+             caption="rental data: first six rows, indexes, first 6 columns",
+             format="html") %>%
+  kableExtra::kable_styling(full_width = F)
+```
+
+Set up the equation to estimate so we can re-use it later:
+```{r eq}
+rent.eq <- formula("log(rent) ~ y90 + log(pop) + log(avginc) + pctstu")
+```
+and estimate using `lm`:
+```{r reg}
+rent.lm <- lm(rent.eq,  data=rental)
+```
+
+What do the results look like?
+```{r outlm, warning=FALSE}
+print(rent.lm)
+summary(rent.lm)
+```
+Standard enough looking output. 
+
+## Panel regressions
+
+Panel estimates are simple. We just specify which model. I've slipped in a `glm` estimate too.
+```{r}
+prental   <- pdata.frame(rental, index=c("city","year")) # Identifiers
+
+rent.pool <- plm(rent.eq, data=prental, model="pooling")
+rent.glm  <- glm(rent.eq, data=prental, family="gaussian")
+rent.wit  <- plm(rent.eq, data=prental, model="within")
+rent.ran  <- plm(rent.eq, data=prental, model="random")
+```
+
+Compare the estimates:
+```{r ests}
+print(rent.lm)
+print(rent.pool)
+print(rent.glm)
+print(rent.wit)
+print(rent.ran)
+```
+
+## Clustering 
+
+We can do clustered standard errors in a number of ways. Here's one:
+```{r clust}
+# Loading the required libraries
+library(lmtest)
+library(multiwayvcov)
+
+# Clustered standard errors - Fixed effect regression (group)
+coeftest(rent.pool, vcov=vcovHC(rent.pool, type="sss", cluster="group"))
+
+# Clustered standard errors - Fixed effect regression (group)
+coeftest(rent.wit, vcov=vcovHC(rent.wit, type="sss", cluster="group"))
+```
+
+## IV estimation
+
+Another Wooldridge data set:
+
+> Wooldridge Source: These data were obtained by James Heakins, a former MSU undergraduate, for a term project. They come from Botswana’s 1988 Demographic and Health Survey.
+
+Simple model of fertility prediction, needing IV.
+
+```{r}
+data("fertil2")
+
+children.eq    <- as.formula("children ~ educ + age + agesq")
+children.eqiv  <- as.formula("children ~ educ + age + agesq | . - educ + frsthalf")
+children.eqiv2 <- as.formula("children ~ educ + age + agesq + electric + tv + bicycle | . - educ + frsthalf")
+
+children.lm    <- lm(children.eq,       data=fertil2)
+children.iv    <- ivreg(children.eqiv,  data=fertil2)
+children.iv2   <- ivreg(children.eqiv2, data=fertil2)
+
+summary(children.lm)
+summary(children.iv)
+summary(children.iv2)
+
+fertil2 %>% 
+  select(children) %>% 
+  mutate(fitted.lm = fitted(children.lm)) %>%
+  mutate(fitted.iv = fitted(children.iv)) %>%
+  mutate(case = 1:nrow(fertil2)) %>%
+  filter(case<201) %>% 
+  pivot_longer(cols=-case, names_to="Var", values_to="Val") %>% 
+  ggplot() +
+  geom_line(aes(x=case,y=Val,group=Var,color=Var))
+```
+
+
+
+## Some asides
+
+### Using `tidymodels`
+
+We can go about this the long way round too. The `tidymodels` framework suggests we do it like this where we use `parsnip`^[Don't ask.]
+```{r parsnip, message=FALSE}
+# Parsnip
+pars_lm <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression") 
+
+pars_lm_fit <- pars_lm %>%
+  fit(rent.eq, data=rental)
+
+print(pars_lm_fit, digits=5)
+```
+
+### Pooled Bayesian regression in Stan
+
+Now we do it all again, but Bayesian and using Stan as the computational engine. Because it is Bayesian, we need some priors, and Stan can provide some semi-automatic ones through available `rstanarm` functions.^[There is a certain oddness about using these functions as they are from a package designed to simplify the use of Stan for users of other packages, but hey.] The functions below set values recognized by Stan that are scaled by the unconditional variance of the individual regressors. These are from the `rstanarm` package, and see [here](http://mc-stan.org/rstanarm/articles/priors.html) for more information.
+
+```{r stan, message=FALSE}
+# Bayes version: set the prior distributions using rstanarm
+prior_t    <- rstanarm::student_t(df = 1)
+prior_norm <- rstanarm::normal(scale = 0.25)
+prior_aux  <- rstanarm::exponential(1, autoscale = TRUE)
+```
+
+Stan wants priors for the coefficients in groups. The priors for the intercept and slope parameters are set as `prior_intercept` and `prior` respectively. The final prior for the variance is set by `prior_aux`, as it is different for different models. If you have the same type of prior for each group, you just have to specify one prior. Don't worry this doesn't give the same prior for each if you use the auto scaling capabilities, but in general you might want to supply a specific prior for each coefficient, perhaps with a random walk in mind.
+
+```{r Bparsnip, message=FALSE}
+set.seed(123) # Make it replicable
+
+# Make the parsnip model, this time with stan
+bayes_mod <-   
+  linear_reg() %>% 
+  set_engine("stan", 
+             iter = 10000, 
+             prior_intercept = prior_norm, 
+             prior = prior_t, 
+             prior_aux = prior_aux) 
+
+# Fit the model
+bayes_fit <- bayes_mod %>%
+  fit(rent.eq, data=rental)
+
+# Regression-type output
+print(bayes_fit,   digits=5)
+```
+
+One of the cool things about this is that it uses Hamiltonian Monte Carlo, and the No-U-Turn Sampler. We can, of course, look at the output from the HMC. All the fitted values are stored in the estimation object as `stanfit` so we can create the kind of graphs we are used to. In `rstan` there is an `extract` function to retrieve the chains, by default stacked one on top of each other. 
+
+```{r bfitted, message=FALSE}
+sfit   <- bayes_fit$fit$stanfit
+ex_fit <- rstan::extract(sfit)
+print(names(ex_fit))
+```
+
+```{r plotall, fig.width=6}
+ex_fit$beta %>% 
+  as_tibble(.name_repair = "unique") %>%
+  rename_all( ~ paste0("beta[", 1:ncol(ex_fit$beta), "]")) %>% 
+  mutate(alpha = ex_fit$alpha, sigma = ex_fit$aux) %>%
+  pivot_longer(cols = starts_with(c("bet", "alp", "sig")), 
+               names_to = "coef", 
+               values_to = "vals" ) %>%
+  ggplot() +
+  geom_density(aes(x=vals, group=coef, fill=coef), color=NA, alpha=.44) + 
+  facet_wrap( ~ coef, scales = "free") +
+  theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(x=NULL, y=NULL, title="Stan estimates")
+```
+

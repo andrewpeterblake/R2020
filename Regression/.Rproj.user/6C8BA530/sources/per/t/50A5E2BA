@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1601976625648.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "2489034906",
+    "id" : "50A5E2BA",
+    "lastKnownWriteTime" : 1568378449,
+    "last_content_update" : 1568378449,
+    "path" : "C:/Users/145607/Desktop/R_course_2020/Day 1/WooldridgeExercise.Rmd",
+    "project_path" : "WooldridgeExercise.Rmd",
+    "properties" : {
+        "cursorPosition" : "4,21",
+        "scrollLine" : "0"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 3,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_markdown"
+}

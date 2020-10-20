@@ -1,0 +1,261 @@
+---
+title: "Random numbers"
+author: "Andrew P. Blake"
+date: "August 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+runtime: shiny
+---
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+--------
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align="center")
+```
+
+## Introduction
+
+- Drawing suitable random numbers is a vital component of Monte Carlo simulation
+- Beginners often we need to use densities that are initially unfamiliar
+- Introduce some key distributions and illustrates their properties, and how to draw suitable random numbers from them
+- Formulae for distributions and their relation to other distributions are given in Lee _Bayesian Statistics_ (2012, Appendix A), Bauwens, Lubrano and Richard _Bayesian Inference in Dynamic Econometric Models_ (1999, Appendix A) and Klugman, Panjer and Willmot _Loss Models: From Data to Decisions_ (2008, Appendix A)
+- We are going to be interested in the properties of some densities, how they relate to each other and how to draw random numbers from those densities
+
+## Normal density
+
+- The Normal distribution is the most familiar
+
+    - If a random variable $X$ is normally distributed with mean $\mu$ and variance $\sigma^2$ 
+$$
+  X \sim N\left(\mu, \sigma^2\right)
+$$
+it has the _Probability Density Function_ (PDF) over the real line
+$$
+  pdf(x) = P(x) = \frac{1}{\sqrt{2\pi\sigma^2}} e^{-\frac{(x-\mu)^2}{2\sigma^2}}
+$$
+
+    - Higher value of the PDF means that a realized $x$ at that value is more likely than any lower one
+
+    - The _Cumulated Density Function_ (CDF) defined as
+$$
+ cdf(x) = \int_{-\infty}^x P(t)dt
+$$
+gives the probability of at least $x$ and integrates to $1$ for $x = \infty$ 
+
+## Bell curves and cumulants
+
+```{r dens, message=FALSE, warning=FALSE, fig.asp=.5}
+library(tidyverse)
+library(magrittr)
+library(rlang)
+
+x   <- seq(-4.5,5.5,0.025)
+pdf <- tibble(x = x, Func = "Density")
+cdf <- tibble(x = x, Func = "Cumulative")
+params <- tibble(mu=c(-1, 0, 0.5), sigma=c(0.75, 1, 1.5))
+for (i in 1:3) {
+  pdf %<>% mutate(!!paste0("P", i) := dnorm(x, params$mu[i], params$sigma[i])) 
+  cdf %<>% mutate(!!paste0("P", i) := pnorm(x, params$mu[i], params$sigma[i])) 
+  }
+
+df <- bind_rows(pdf,cdf) %>% 
+  pivot_longer(cols = -c(x, Func), names_to = "Parameters", values_to = "Value") %>%
+  mutate(Func = as_factor(Func))
+
+ggplot(df) + 
+  geom_area(aes(x, Value, group=Parameters, fill=Parameters), position="identity", alpha=.3) +
+  theme_minimal() +
+  labs(title="Three parameterisations", x="", y="") +
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) +
+  facet_wrap(~ Func, scales = "free")
+```
+<div class="centered">
+Familiar with the Bell-curve shape of a Normal distribution
+</div>
+
+## Drawing Normal random numbers
+
+- How do we draw random numbers from this (or any other) distribution?
+- In a program like Matlab (or R or Gauss) and for many known distributions this is easy as random number generators are built in, and we don't really need to worry about how they work
+- We can safely assume that we can draw Standard Normal distributed numbers and Standard Uniform ones; most systems have both although the Uniform is actually more common
+- Simulating any Normally distributed variable is then simply a matter of drawing from the Standard Normal, scaling by $\sigma$ (the standard error) and adding back the mean, $\mu$
+- Simple rescaling means that draws from multivariate normal distributions with known covariance is easy too
+
+#### _Unknown random number generators_
+
+- However, in Bayesian analysis we often don't know how to draw from some given density; often we will draw (pseudo) random numbers from an available random number generator and use them to generate random numbers from a different density
+
+- For this we need to use techniques that are designed to recover these unknown distribution, notably Gibbs Sampling and the Metropolis-Hastings Algorithm
+
+## Sample draws
+
+```{r rand, fig.asp=.6, warning=FALSE, message=FALSE}
+n   <- 10000L
+rdf <- tibble(s = 1:n)
+for (i in 1:3) { rdf %<>% mutate(!!paste0("R", i) := rnorm(n, params$mu[i], params$sigma[i])) }
+
+rdf %>% 
+  pivot_longer(cols = -s, names_to = "Draw", values_to = "Value") %>% 
+  ggplot() + 
+  geom_line(aes(s, Value, group=Draw, color=Draw), alpha=.7) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  facet_grid(Draw~.) +
+  labs(title="Random draws", x="", y="") +
+  scale_x_continuous(expand=c(0,0))
+```
+<div class="centered">
+Three normal densities: $N(-1, 0.75)$, $N(0, 1)$, $N(0.5, 1.5)$
+</div>
+
+## Simulated densities
+
+```{r normest, fig.asp=.6}
+rdf %>% 
+  pivot_longer(cols = -s, names_to = "Draw", values_to = "Value") %>% 
+  ggplot(aes(Value)) + 
+  geom_histogram(aes(y=..density.., group=Draw, color=NULL, fill=Draw), 
+                 position="identity", bins=60, alpha=.3) +
+  geom_density(aes(group=Draw, color=Draw), position="identity", alpha=.7) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title="Densities estimated from draws", x="", y="") + 
+  theme(plot.title = element_text(hjust = 0.5))
+```
+<div class="centered">
+Densities estimated from 1000 draws
+</div>
+
+## The $\chi^2$ distribution
+
+- The random variable $X$ such that
+$$
+   X \sim \chi^2_n
+$$
+is said to be $\chi^2$ distributed with $n$ degrees of freedom
+- Distribution of the sum of the squares of $n$ Standard Normal variables
+- $\chi^2_n$ PDF is
+$$ 
+ pdf(x) = \frac{1}{\gamma\left(\frac{n}{2}\right)} 2^{-\frac{n}{2}} x^{\frac{n}{2}-1} e^{-\frac{x}{2}} 
+$$
+where $\gamma(\cdot)$ is the _Gamma function_, which for positive integer values is evaluated as $\gamma(k) = (k-1)!$
+- This distribution has some nice properties, with mean $n$ and variance $2n$ 
+- Familiar distribution, much used in econometrics
+    - A test statistic based on a quadratic form typically has this distribution
+
+## $\chi^2_{10}$ 
+```{r rand2, fig.asp=.8, message=FALSE, warning=FALSE}
+library(actuar)
+T   <- 10000L
+n   <- 10
+rdf <- tibble(s  = 1:T, 
+              G3 = rgamma(T, n/2, 1/2), 
+              G2 = colSums((matrix(rnorm(T*n,0,1), n, T))^2),
+              G1 = rchisq(T, n),
+              G4 = 1/rinvgamma(T, n/2, 2/1)) %>% 
+  pivot_longer(cols = -s, names_to = "Draw", values_to = "Value")
+
+ggplot(rdf) + 
+  geom_line(aes(s, Value, group=Draw, color=Draw), alpha=.6) +
+  theme_minimal() +
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) +
+  labs(title="10000 random draws", x="", y="") +
+  facet_wrap(~Draw)
+
+ggplot(rdf, aes(Value)) + 
+  geom_histogram(aes(y=..density.., group=Draw, fill=Draw), 
+                 color=NA, position="identity", bins=40, alpha=.3) +
+  geom_density(aes(group=Draw, color=Draw), position="identity", alpha=.3) +
+  theme_minimal() +
+  theme(legend.position = "none", plot.title = element_text(hjust = 0.5)) +
+  labs(title="Density estimated from draws", x="", y="")  +
+  facet_wrap(~Draw)
+```
+<div class="centered">
+G1 draws from $\chi^2_n$ distribution; G2 sums of 10 squared draws from $N(0,1)$; 
+G3 -- $\Gamma$ distribution with $T=5$, $\theta=1/2$; G4 -- $1/\Gamma^{-1}$ distribution with $T=5$, $\theta=2$
+</div>
+
+## Interactive density plots
+
+```{r, message=FALSE, warning=FALSE}
+library(shiny)
+library(shinythemes)
+library(ggthemes)
+library(actuar)
+
+# Define UI 
+ui <- fluidPage(
+   
+  theme = shinytheme("cerulean"),
+  h3("Density choice"),
+  sidebarLayout(
+    sidebarPanel(
+      selectInput("dens", "Select density",
+                  c("Normal"          = "norm",
+                    "Gamma"           = "gamma",
+                    "Inverse Gamma"   = "invgamma",
+                    "Log Gamma"       = "lgamma",
+                    "Uniform"         = "unif",
+                    "Beta"            = "beta",
+                    "Inverse Pareto"  = "invpareto",
+                    "Inverse Weibull" = "invweibull",
+                    "ParaLogistic"    = "paralogis"),
+                  selected = "gamma"),
+      numericInput("P1", label="Parameter 1", value=1),
+      numericInput("P2", label="Parameter 2", value=1),
+      sliderInput("xval", "Scale min:",  min=-10, max=10,  value=c(0,6), step=0.25), 
+      width = 4),
+    mainPanel(
+      tabsetPanel(type = "tabs",
+                  tabPanel("Graph", plotOutput("Plot", height=300)),
+                  tabPanel("Stats", DT::dataTableOutput("Stats")))
+      ), 
+    position = "left"
+    )
+  )
+
+# Define server logic required
+server <- function(input, output) {
+   
+  calc_d <- reactive({
+    
+      x  <- seq(input$xval[1], input$xval[2], length.out=1000)
+      y  <- exec(paste0("d", input$dens), x, input$P1, input$P2)
+      pp <- ggplot(data.frame(x=x, y=y)) +
+        geom_area(aes(x=x, y=y), fill="springgreen2", color=NA, alpha=.44) +
+        theme_stata() +
+        labs(title=paste("Density:", input$dens), x="", y="") +
+        theme(legend.position = "none") +
+        scale_x_continuous(expand=c(0,0)) +
+        scale_y_continuous(expand=c(0,0))
+      
+      stats <- matrix(0,8,1)
+      rownames(stats) <- c("Parameter 1", "Parameter 2", 
+                           "Mean (from mgf)", "Median", "Variance (from mgf)", 
+                           "13th centile", "87th centile", "97.5th centile")
+      colnames(stats) <- "Value"
+      stats[1] <- input$P1
+      stats[2] <- input$P2
+      m        <- exec(paste0("m", input$dens), 1, input$P1, input$P2)
+      stats[3] <- m
+      stats[4] <- exec(paste0("q", input$dens), 0.5, input$P1, input$P2)
+      stats[5] <- exec(paste0("m", input$dens), 2, input$P1, input$P2) - m*m
+      stats[6] <- exec(paste0("q", input$dens), 0.13, input$P1, input$P2)
+      stats[7] <- exec(paste0("q", input$dens), 0.87, input$P1, input$P2)
+      stats[8] <- exec(paste0("q", input$dens), 0.975, input$P1, input$P2)
+      
+      return(list(pp,round(stats,3)))
+   
+  })
+  
+  output$Plot  <- renderPlot({ calc_d()[[1]] })
+  output$Stats <- DT::renderDataTable({ calc_d()[[2]] })
+  
+}
+shinyApp(ui=ui, server=server, options=list(height=800))
+```

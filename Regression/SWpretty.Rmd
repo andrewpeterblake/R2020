@@ -1,0 +1,233 @@
+---
+title: "Multiple multiple regressions"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayyman
+    highlight: github
+bibliography: refs2.bib
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align='center')
+```
+
+> _The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+## Take a big dataset: transform it, test it, model it
+
+One big advantage of R is the way we can easily apply methods to data sets and look at the results in new and interesting ways. The Stock-Watson dataset has been widely used in economics, and used to be thought of as 'big data', but by modern standards quite modest in size. Even so, it consists of more that 100 series. An up-to-date version of the data is made available by @McNg via [FRED](https://research.stlouisfed.org/econ/mccracken/fred-databases/). 
+
+Here we will obtain the data, transform it, plot it, test it and model it in a few lines of code. The biggest problem is that it would be nice to analyze it in the context of the different categories of data, and that information is in a separate PDF. So we will read that to get the information. Elsewhere we will do much more of this kind of thing.
+
+## Visualizing and testing the Stock Watson dataset
+
+First, load the libraries we will need. These include tools to read pdf files and do ADF tests.
+
+```{r libs, warning=FALSE, message=FALSE}
+library(pdftools)
+library(tidyverse)
+library(lubridate)
+library(aTSA)
+```
+
+We want to know what group each variable is and the transform we need to apply. We have an [auxilliary PDF](https://s3.amazonaws.com/files.fred.stlouisfed.org/fred-md/Appendix_Tables_Update.pdf) that tells us all of this, so we parse it to get the information out having read it using `pdf_text` from `pdftools`.
+
+```{r table}
+tt <- pdf_text("Appendix_Tables_Update.pdf")
+tt <- unlist(strsplit(tt,"\r\n"))[-c(1:9,29,76,133,164)] # Drop the bits that aren't table
+tt <- gsub("IPB51222s", "IPB51222S", tt)
+
+j  <- 0
+fred  <- NULL
+trans <- NULL
+group <- NULL
+id    <- NULL
+mod   <- NULL
+desc  <- NULL
+for (i in 1:length(tt)) {
+  if (grepl(" Group ", tt[i])) {
+    grp <- str_trim(tt[i])
+    grp <- str_sub(grp, str_locate(grp,":")[1]+2, nchar(grp))
+    tc  <- str_locate(tt[i+1],"tcode")[1]
+    f   <- str_locate(tt[i+1],"fred")[1]
+    k   <- str_locate(tt[i+1],"description")[1]-1
+    kk  <- str_locate(tt[i+1],"gsi")[1]-1
+  }
+  else {
+    if (!grepl(" tcode ", tt[i])) {
+      j <- j+1
+      group[j] <- str_trim(grp)
+      fred[j]  <- str_trim(str_sub(tt[i], f, k))
+      fred[j]  <- gsub("[&: ]",".",fred[j])
+      desc[j]  <- str_trim(str_sub(tt[i], k+1, kk))
+      trans[j] <- str_trim(str_sub(tt[i], tc, f-1))
+      id[j]    <- str_trim(str_sub(tt[i], 1, tc-1))
+      id[j]    <- str_trim(str_sub(id[j], str_locate(id[j]," ")[1], nchar(id[j])))
+      mod[j]   <- FALSE
+      if (str_sub(id[j], nchar(id[j]), nchar(id[j])) == "*") {
+        mod[j]   <- TRUE  
+        id[j]    <- str_sub(id[j], 1, nchar(id[j])-1)
+      }
+    }
+  }
+}
+
+meta <- tibble(ID          = as.numeric(id), 
+               FRED        = fred, 
+               tcode       = as.numeric(trans), 
+               Group       = group,
+               Description = desc)
+
+knitr::kable(head(meta))
+```
+
+Now read the data.
+
+```{r data}
+# download.file("http://research.stlouisfed.org/econ/mccracken/fred-databases/monthly/current.csv","current.csv")
+McNN <- read.csv("current.csv", header=TRUE)
+
+Data <- McNN %>%
+  slice(-1) %>%
+  mutate(sasdate = as.Date(sasdate, format="%m/%d/%Y")) %>%
+  rename(Date = sasdate) %>%
+  filter(!is.na(Date)) %>% 
+  pivot_longer(cols = -Date, names_to = "FRED", values_to = "Value") %>% 
+  left_join(meta, by="FRED")
+
+ggplot(Data) + 
+  geom_line(aes(x=Date, y=Value, group=FRED, color=FRED), show.legend=FALSE) +
+  facet_wrap(~Group, scales = "free_y") + 
+  theme_minimal() +
+  labs(title="Untransformed data by group", x="", y="")
+```
+
+Are these data stationary? Let's perform an ADF test on every series.
+
+```{r stationary}
+tests1 <- Data %>% 
+  group_by(FRED, Group) %>% 
+  summarise(p_adf = adf.test(Value, 3, output=FALSE)$type3[3,3]) 
+
+ggplot(tests1) + 
+  geom_jitter(aes(x=Group, y=p_adf, colour=FRED), show.legend = FALSE) + 
+  theme_minimal() + 
+  coord_flip() +
+  ylim(0,1) +
+  labs(title="ADF3 tests, lag=2, p-value", x="", y="")
+
+```
+
+## Apply transforms
+
+We can apply the transforms we got from the PDF to stationarize the series, and check it's worked.
+
+```{r tarnsform, warning = FALSE}
+Data2 <- Data %>%
+  group_by(FRED) %>%
+  mutate(Value = case_when(tcode==1 ~ Value,
+                           tcode==2 ~ Value-lag(Value,1), 
+                           tcode==3 ~ Value-2*lag(Value,1)+lag(Value,2),
+                           tcode==4 ~ log(Value),
+                           tcode==5 ~ log(Value)-log(lag(Value,1)), 
+                           tcode==6 ~ log(Value)-2*log(lag(Value,1))+log(lag(Value,2)), 
+                           tcode==7 ~ Value/lag(Value,1)-lag(Value,1)/lag(Value,2)
+                           )
+         ) %>%
+  slice(-(1:3)) %>%
+  mutate(Value = scale(Value)) %>% 
+  ungroup() %>%
+  mutate(tcode=as.factor(tcode))
+
+fcolors <- c("1" = "red", "2" = "blue", "3" = "darkgreen", "4" = "orange",
+             "5" = "cyan", "6" = "wheat3", "7" = "pink")
+ggplot(Data2) + 
+  geom_line(aes(x=Date, y=Value, group=FRED, color=tcode), show.legend = TRUE) +
+  scale_color_manual(values=fcolors) +
+  facet_wrap(~Group, scales = "free_y") +
+  theme_minimal() +
+  labs(title="All transformed series by group", x="", y="")
+
+```
+
+Plots by group can be done in a simple loop.
+
+```{r grp, warning=FALSE}
+
+grp <- unique(Data2$Group)
+
+for (i in 1:length(grp)) {
+  filter(Data2, Group == grp[i]) %>% 
+    ggplot() + 
+    geom_line(aes(x=Date, y=Value, group=FRED, color=tcode), show.legend=FALSE) +
+    scale_color_manual(values=fcolors) + 
+    facet_wrap( ~ FRED) +
+    theme_minimal() +
+    labs(title = grp[i], x="", y="")
+}
+
+```
+
+Retest the transformed data for stationarity. 
+
+```{r stationary2}
+
+tests2 <- Data2 %>% 
+  group_by(FRED, Group) %>% 
+  summarise(p_adf = adf.test(Value, 3, output=FALSE)$type3[3,3]) 
+
+ggplot(tests2) + 
+  geom_jitter(aes(x=Group, y=p_adf, colour=FRED), show.legend = FALSE) + 
+  theme_minimal() + 
+  coord_flip() +
+  ylim(0,1) +
+  labs(title="ADF3 tests, lag=2, p-value", x="", y="")
+
+```
+
+Fit an autoregressive model to every series, and retrieve some stats.
+
+```{r AR}
+# AR(2) in each series
+AR <- function(df) { lm(Value ~ lag(Value,1) + lag(Value,2), data = df) }
+
+stats <- Data2 %>% 
+  group_by(FRED, Group) %>% 
+  nest() %>%                                      # Wrap all data into a list
+  mutate(model  = map(data, AR)) %>%              # map AR to data
+  mutate(cvals  = map(model, coefficients)) %>%   # Export coefficients
+  mutate(glance = map(model, broom::glance))      # Look at stats
+```
+
+Let's look at some $R^2$s.
+
+```{r glance}
+stats %>% unnest(glance) %>% 
+  select(FRED, Group, r.squared) %>% 
+  filter(Group == "Stock market")
+```
+
+What about histograms of the AR coefficients? 
+
+```{r hist}
+
+cnames <- c("alpha", paste0("beta[",1:2,"]"))
+
+stats %>% 
+  select(FRED, Group, cvals) %>% 
+  mutate(Group = gsub(",", "", Group), Group = gsub(" ", "_", Group)) %>% 
+  unnest(cvals) %>% 
+  group_by(FRED) %>%
+  mutate(coef = cnames) %>% 
+  ggplot() +
+  geom_histogram(aes(x=cvals, fill=coef), alpha=.55, bins=25, show.legend=FALSE) +
+  facet_grid(Group~coef, scales="free_x", labeller = label_parsed) +
+  theme_minimal() +
+  theme(strip.text.y = element_text(angle = 0)) +
+  labs(title="AR(2) coefficients by group", x="", y="")
+
+```
+
+## Reference

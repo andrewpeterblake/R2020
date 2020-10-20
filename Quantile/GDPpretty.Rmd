@@ -1,0 +1,277 @@
+---
+title: "GDP @ Risk"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+bibliography: qr.bib    
+---
+
+```{r, setup, include=FALSE}
+knitr::opts_chunk$set(fig.align="center", fig.width=12)
+```
+
+> _The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+-------
+
+## Simple implementation of _GDP at Risk_ using R 
+
+A somewhat fashionable use of quantile regression is by @Adrian, and their idea has become known as _GDP-at-risk_, rather like VaR. The idea is to use a simple forecasting model that uses some financial indicator and find the "at risk" value of growth. There are three elements:
+
+- Estimate a "forecasting model" using quantile regression that depends on some forward-looking indicator.
+- Fit a skew Student-t model to the output of their quantile estimation procedure, and use this to find the "at risk" value.
+- We will plot the result as a _ridgeline graph_, which are really quite cool.
+
+This is computationally quite a bit harder than our other applications.
+
+## Prelims
+
+We need a lot of libraries for this one, although we have relatively little code!
+
+```{r cars, warning=FALSE, message=FALSE}
+
+library(jsonlite)          # Read in UK data
+library(zoo)               # Date stuff
+library(quantreg)          # Quantile regression
+library(ggridges)          # Ridgeline plots
+library(viridis)           # Colours for graphs
+library(fitdistrplus)      # Package to fit parametric distributions
+library(sn)                # Skew-t distribution
+library(tidyverse)         # Usual
+library(lubridate)         # More usual
+library(readxl)            # And more...
+
+```
+
+## Data
+
+Downloaded data _up until 2018_ for [UK GDP growth](https://www.ons.gov.uk/economy/grossdomesticproductgdp/timeseries/ihyr) in [JSON format](https://www.ons.gov.uk/economy/grossdomesticproductgdp/timeseries/ihyr/data) from ONS UK in a file called `ihyr.json`.
+```{r data}
+json  <- fromJSON("ihyr.json")  # Use jsonlite to parse file
+
+# Retrieve quarterly data, dates etc and calculate lags
+qdata <- json$quarters %>% 
+  mutate(Date   = as.Date(as.yearqtr(date, format = "%Y Q%q")), 
+         Growth = as.numeric(value)) %>%
+  select(Date, Growth) %>%
+  mutate(Growth_1 = lag(Growth, 1), 
+         Growth_4 = lag(Growth, 4)) %>%
+  drop_na()
+```
+
+[BIS credit data](https://www.bis.org/statistics/totcredit.htm) is available [here](https://www.bis.org/statistics/totcredit/totcredit.xlsx) -- be warned there is a lot of it, and you need to get all of it to find the bits you want.
+```{r data2}
+totcredit <- read_excel("totcredit.xlsx", 
+                        sheet = "Quarterly Series",
+                        col_types = c("date", rep("text", 1130))) %>%
+  select(Date = "Back to menu", starts_with("United K")) %>%            # Find UK
+  slice(-c(1:3)) %>% 
+  select(-contains("US Dollar"), -contains("Unadjusted"), -contains("Domestic currency")) %>%
+  mutate(Date = as.Date(Date)) 
+```
+
+Names in the BIS file are very long so kludge them to something a bit more readable.
+```{r data3}
+nn  <- gsub("United Kingdom - ", "", names(totcredit))
+nn  <- gsub(" - Adjusted for breaks", "", nn)
+nn  <- gsub(" - Percentage of GDP", "", nn)
+nn  <- gsub(" at Market value", "", nn)
+
+totcredit <- rename_with(totcredit, ~ nn)
+```
+
+### Plots of pivoted data
+
+```{r plotd}
+dd <- totcredit %>%
+  pivot_longer(cols=-Date, names_to = "Var", values_to = "Val") %>%
+  mutate(Val = as.numeric(Val)) %>%
+  filter(!is.na(Val))
+
+ggplot(dd) + 
+  geom_line(aes(x=Date, y=Val, group=Var, colour=Var), show.legend = FALSE) +
+  facet_wrap(~Var, scales = "free") + 
+  theme_minimal() +
+  labs(x="", y="", title="Credit data; all as percentage of GDP")
+```
+
+### Difference data at required interval 
+
+We will use some measure of long run credit growth as a predictor of financial fragility. Pick an interval -- we choose five years -- and calculate the growth rate.
+
+```{r diff, warning=FALSE}
+
+lagv <- 20
+
+dd2 <- dd %>% 
+  group_by(Var) %>% 
+  mutate(Val = 100*(Val/lag(Val,lagv)-1)) %>% 
+  ungroup() 
+
+ggplot(dd2) + 
+  geom_line(aes(x=Date, y=Val, group=Var, colour=Var), show.legend = FALSE) +
+  facet_wrap(~Var, scales = "free") + 
+  theme_minimal() +
+  labs(x="",y="", title=paste("Credit data; Percentage difference over", lagv, "quarters"))
+```
+
+### Choose a variable
+
+We select the variable we want, plot it to check, and then create a data set to use in the quantile regression. What are the variables?
+```{r clag}
+# Recall all the names are in nn
+print(nn)
+```
+
+Let's go for number 7.
+
+```{r clagb}
+
+dd2a <- filter(dd2, Var == nn[7]) %>% 
+  select(Date, Val) %>% 
+  rename_with(~ c("Date", "GCredit")) %>% 
+  mutate(Date = floor_date(Date, unit="quarter")) %>% 
+  arrange(Date)
+
+# Quick plot to check we have the right one
+ggplot(dd2a) + 
+  geom_line(aes(x=Date, y=GCredit), color = "red") +
+  theme_minimal()
+
+dataz <- left_join(qdata, dd2a, by="Date") %>% 
+  mutate(GCredit_1 = lag(GCredit,1)) %>% 
+  mutate(GCredit_4 = lag(GCredit,4)) %>% 
+  drop_na()
+
+head(dataz)
+```
+
+## Equation and estimates
+
+Run a single quantile regression. We will do just one, and then look at in-sample predictions. Really we ought to do this recursively. A couple of parameters let us choose bits of the model.
+```{r ests, warning=FALSE}
+fcast <- 4
+inccg <- 1
+
+if (inccg > 0) {
+  eqn.q <- formula(paste0("Growth ~ Growth_", fcast, " + GCredit_", fcast))
+} else {
+  eqn.q <- formula(paste0("Growth ~ Growth_", fcast))  
+}
+
+q.inst <- rq(eqn.q, data=dataz, tau=seq(.05,.95,.025))
+summary(q.inst)
+```
+
+## Non-parametric results
+
+We can easily plot the interpolated empirical density as ridgeline plots, see @ggridges. First we retrieve and then organize the predicted values.
+```{r nonpara, fig.width=8, fig.height=12, message=FALSE}
+
+q.predict <- t(predict(q.inst)) %>%           # In-sample predictions
+  as_tibble(.name_repair = "unique") %>% 
+  rename_with(~ as.character(dataz$Date)) %>%
+  pivot_longer(everything(), names_to = "Date", values_to = "Vals") %>%
+  mutate(Date = as.Date(Date)) %>% 
+  filter(lubridate::year(Date) > 1003)
+
+```
+
+Next we plot them as non-parametric density estimates in a ridgeline plot.
+
+```{r nonpara1, fig.width=8, fig.height=12}
+
+ggplot(q.predict, aes(x=Vals, y=Date, group=Date)) + 
+  geom_density_ridges(scale=5, colour="grey77", fill="slateblue1") +
+  theme_ridges() + 
+  labs(x="", y="", title = "GDP@Risk: Non-parametric density estimates")
+
+```
+
+What about with the tail probabilities emphasized? Now we need to use `stat_density_ridges` instead of the `geom`, and it takes a long time to plot, as the fill is over the continuous x-axis.
+
+```{r nonpara2, fig.width=8, fig.height=12}
+
+ggplot(q.predict, aes(x=Vals, y=Date, group=Date, fill = 0.5-abs(0.5-stat(ecdf)))) + 
+  stat_density_ridges(geom="density_ridges_gradient", calc_ecdf=TRUE, scale=5, colour="grey77") +
+  scale_fill_viridis(option="D", direction=-1, alpha=.7) +
+  theme_ridges() + 
+  theme(legend.position = "none") + 
+  labs(x="", y="", title = "GDP@Risk: Non-parametric density estimates")
+
+```
+
+There's quite a long, messy left hand tail, and the density is often bi-modal. A way of tidying this up is to fit a parametric distribution to this, and then treating that as the actual distribution.
+
+### Parametric results
+
+We now fit a skew-t to the predicted quantiles, and then work with these estimated densities afterwards. 
+```{r para, fig.width=8, fig.height=12, warning=FALSE}
+dens <- NULL # Store densities
+val5 <- NULL # Store 5% info
+eall <- NULL # Store estimated parameters
+
+x   <- seq(-5,7,0.05)                        # Evaluate fitted density over this interval
+
+st  <- list(xi=2, omega=1, alpha=0, tau=0)
+for (i in unique(q.predict$Date)) {
+  
+  pp  <- filter(q.predict, Date==i)                             # Predicted vals for i
+  
+  fsn <- fitdist(pp$Vals, "sn", method="mge", start=st)         # Fit the skew t
+  e   <- fsn$estimate                                           # Fitted values
+  y   <- dsn(x,    xi=e[1], omega=e[2], alpha=e[3], tau=e[4])   # Fitted density
+  vr  <- qsn(0.05, xi=e[1], omega=e[2], alpha=e[3], tau=e[4])   # 5% quantile
+  dr  <- dsn(vr,   xi=e[1], omega=e[2], alpha=e[3], tau=e[4])   # Density at that point
+  
+  dens <- bind_rows(dens, tibble(x=x,   y=y,   Date=i))
+  val5 <- bind_rows(val5, tibble(vr=vr, dr=dr, Date=i))
+  eall <- bind_rows(eall, tibble(Date=as.Date(i), xi=e[1], omega=e[2], alpha=e[3], tau=e[4]))
+  
+}
+```
+
+Plots of calculated values and 5% boundary as dots
+```{r para2, fig.width=8, fig.height=12}
+
+sc   <- 1750                                    # Scale factor
+
+#ggplot(dens) + 
+#  geom_ridgeline_gradient(aes(x=x, height=y, y=Date, group=Date, scale=sc, fill=..x..), 
+#                          colour="grey77") +
+#  geom_point(data=val5, aes(x = vr, y = Date), color="red", size=1.1) + 
+#  scale_fill_viridis(name="Growth\ndistribution", option = "D", direction = -1, alpha=.7) +
+#  theme_ridges() + 
+#  labs(x="", y="", title = "GDP@Risk: Fitted skew-t")
+
+ggplot(dens) + 
+  geom_ridgeline(aes(x=x, height=y, y=Date, group=Date), 
+                 colour="grey77", fill="slateblue1", scale=sc) +
+  geom_point(data=val5, aes(x = vr, y = Date), color="red", size=1.1) + 
+  theme_ridges() + 
+  labs(x="", y="", title = "GDP@Risk: Fitted skew-t")
+
+```
+
+We can use vertical lines the height of the density at these points which is handy -- so this is a version of that where we have to redefine the "super y" axis.
+```{r para3, fig.width=8, fig.height=12}
+
+dens <- mutate(dens, Datef=as.numeric(Date))    # Dates as numbers
+val5 <- mutate(val5, Datef=as.numeric(Date))
+
+ggplot(dens) + 
+  geom_ridgeline(aes(x=x, height=y, y=Datef, group=Date),
+                 colour="grey77", fill="slateblue1", scale=sc) +
+  geom_segment(data=val5, aes(x=vr, xend=vr, y=Datef, yend=Datef+sc*dr), 
+               color="red", size=0.75) + 
+  theme_ridges() + 
+  labs(x="", y="", title = "GDP@Risk: Fitted skew-t") +  
+  theme(axis.text.y = element_blank()) 
+
+```
+But notice we've changed how we deal with the observation indices to draw this so easily, and this means losing the date labels. 
+
+## References

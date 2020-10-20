@@ -1,0 +1,324 @@
+---
+title: "Topic models"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+bibliography: Textmining.bib
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = TRUE, fig.align="center")
+```
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+-------
+
+## Topics from text
+
+**Topic modelling** was introduced to text analysis by @LDA, who had the idea that topics in text could be characterized by a propensity to use words in particular combinations, and those combinations could be described by a suitable distribution. This has been generalized in many dimensions since (e.g. @CTM or @RSA), and implementations in R include @topicmodels, @lda and @stm.
+
+I'll focus on the original proposal. What @LDA suggested was that the text could be modeled using the **Dirichlet distribution**. Thus each **topic** is a [Dirichlet distribution](https://en.wikipedia.org/wiki/Dirichlet_distribution) of words, and topics are allocated to each **document** in proportions, with each document the sum of available topics. So a document could be almost all one topic, or a mixture of two or more. Estimation these unknown densities that represent the topics and then assigning them to documents is a process known as [_Latent Dirichlet Allocation_](https://en.wikipedia.org/wiki/Latent_Dirichlet_allocation) (LDA). Essentially is is a multivariate distribution of the proportions of each words defining each topic, with each document made up of the topics with weights specific to the document given the topic. 
+
+What this requires us to buy as a way of modelling the topics is that there are a number of documents which are made up of a given number of topics in different proportions. This is quite a strong assumption, but seems to work. Approaching this is remarkably easy. The example used here is the Bank of Canada's _Monetary Policy Report_, which have been published at least twice a year since 1995. The documents need to be tokenized by single words^[Potentially I could use bigrams or longer, but here just single words.], then stop words removed, possibly some other irrelevant words^[The tables in the Canadian MPRs used below produce some spurious words, discussed below.], a _document term matrix_ created and then factorized. I can then produce some great graphs of the topic contents and the discussion timeline.
+
+## Read the text
+
+Load some libraries.
+
+```{r libs, warning=FALSE, message=FALSE}
+library(pdftools)     # Read pdfs
+library(stringi)
+
+library(tidyverse)
+library(lubridate)
+library(tidytext)     # Tidy text!
+library(ggwordcloud)  # Wordclouds in ggplot2
+library(SnowballC)    # Word stemmer
+
+library(topicmodels)  # Package for LDA
+
+library(cowplot)      # plot_grid below from this 
+library(RColorBrewer) # So we can get consistent colors
+```
+
+This function is specifically tailored to read a Canadian _Monetary Policy Report_ to a data frame.
+
+```{r sub}
+text_to_frame = function(pdf_file) {
+  
+  date  <- as.Date(substr(pdf_file,5,14))
+  mths  <- month.abb[month(date)]
+  yrs   <- year(date)
+  
+  MPR <- suppressMessages(pdf_text(pdf_file))
+  MPR <- gsub("\r\n"," ",MPR)
+  MPR <- gsub("\t"," ",MPR)
+  # MPR <- stringi::stri_escape_unicode(MPR)
+  MPR <- stri_trans_general(MPR, "latin-ascii")
+  MPR <- iconv(MPR, "UTF-8", "ASCII", sub = " ")
+  MPR <- gsub("[[:digit:]]+"," ",MPR)
+  # MPR <- gsub("[[:punct:]]+"," ",MPR)
+  MPR <- gsub("[[:space:]]+"," ",MPR)
+  MPR <- tolower(trimws(MPR))
+  MPR <- gsub("monetary policy report"," ",MPR)
+  MPR <- gsub("onetary policy report"," ",MPR)
+  MPR <- gsub("netary policy report"," ",MPR)
+  MPR <- gsub("m o n e t a r y p o l i c y r e p o r t","",MPR)
+  MPR <- gsub("r e p o r t o n m o n e t a r y p o l i c y","",MPR)
+  MPR <- gsub("bank of canada"," ",MPR)
+  MPR <- gsub("b a n k o f c a n a d a","",MPR)
+  MPR <- gsub("[[:space:]]+"," ",MPR)
+  MPR <- gsub("file information for internal use only"," ",MPR)
+  
+  MPR <- trimws(MPR)
+  MPR_add <- tibble(page=1:length(MPR),
+                    document=pdf_file,
+                    year=year(date),
+                    month=mths,
+                    text=MPR) 
+  
+  gg <- MPR_add$text
+  lm <- tolower(month.name[month(date)])
+  cm <- paste0("^", lm)
+  for (l in 1:2) {
+    gg <- trimws(gsub("^global economy", "", gg))
+    gg <- trimws(gsub("^canadian economy", "", gg))
+    gg <- trimws(gsub("^appendix", "", gg))
+    gg <- trimws(gsub("^update", "", gg))
+    gg <- trimws(gsub("^risks to the inflation outlook", "", gg))
+    gg <- trimws(gsub("^reassessment of canadian potential output growth", "", gg))
+    gg <- trimws(gsub(cm, "", gg))
+    gg <- trimws(gsub(trimws(gsub("", " ", lm)), "", gg))
+    gg <- trimws(gsub("^chart", "", gg))
+    gg <- trimws(gsub("^box", "", gg))
+    gg <- trimws(gsub("^table", "", gg))
+  }
+  gg <- trimws(gsub("bankofcanada ca", "", gg))
+  wr <- which(word(gg) == "bibliography")
+  if (length(wr) < 1) wr <- which(word(gg) == "references") 
+  
+  MPR_add$text <- gg
+  
+  if (length(wr) > 0) MPR_add <- MPR_add[1:(wr-1),]
+  
+  MPR_add <- MPR_add %>% 
+    filter(word(text, 1) != "") %>% 
+    filter(word(text, 1) != "contents") %>% 
+    filter(word(text, 5, 6) != "sixtieth anniversary") %>% 
+    filter(word(text, 1, 3) != "the silver dollar") %>% 
+    filter(word(text, 2, 3) != "sterling silver") %>% 
+    filter(word(text, 2, 3) != "gold coin") %>% 
+    filter(word(text, 1, 2) != "gold coin") %>% 
+    filter(word(text, 1, 3) != "library of parliament") %>% 
+    filter(word(text, 1, 4) != "this is a report") %>% 
+    filter(word(text, 1, 5) != "this text is a commentary") %>% 
+    filter(word(text, 1, 5) != "canada s inflation control strategy")
+  
+  return(MPR_add)
+}
+
+```
+
+It turns out there are a lot of words I might want to exclude, many of which are rather spuriously introduced in some of the graphs. A casual pre-inspection of some of the words indicates that the following are not really part of the documents. I also exclude the months.
+
+```{r words}
+suppress <- tibble(word=c("chart", "axis", "proj'd" , "line", "space", "marks",
+                          "styles", "axes", "edge", "left", "scale", "dot", 
+                          "lines", "stacking", "ticks", "centered", "en.indd", 
+                          "minor", "page", "white", "width", "alignment", "artwork", 
+                          "tick", "title", "bottom", "st", "labels", "observations", 
+                          "source",  tolower(month.name)))
+
+files <- list.files(pattern = "^mpr.+pdf$")
+
+mpr_terms <- list()
+for(j in 1:length(files)) {
+  
+  MPR <- text_to_frame(files[[j]]) # %>% 
+  # mmutate(text = gsub("[[:punct:]]+", " ", text))
+  
+  # Unnest tokens to single words
+  tidy_MPR <- MPR %>% 
+    unnest_tokens(word, text) %>% 
+    anti_join(stop_words, by="word") %>% 
+    anti_join(suppress, by="word")
+  
+  mpr_terms[[j]] <- tidy_MPR %>% 
+    group_by(word) %>% 
+    summarise(n=n(), .groups="drop") %>% 
+    arrange(desc(n)) %>% 
+    mutate(Doc = files[j])
+
+}
+```
+
+### Should we exclude the updates?
+
+Is it the case that the off-round update documents are different in some way? If so should we exclude them? It is easiest to see if they are different in length using a column plot. I've done a little pre-analysis, and I think the updates all have less than 2850 words. Let's see. I create an indicator variable called `Update`, which I set to `red` or `blue`. 
+
+```{r dtm}
+mpr_terms <- bind_rows(mpr_terms) %>% 
+  mutate(word = wordStem(word)) %>% 
+  group_by(Doc) %>% 
+  mutate(T = sum(n)) %>% 
+  ungroup() %>%
+  mutate(Date = as.Date(str_sub(Doc, 5))) %>%
+  mutate(Update = if_else(T < 2850, "red", "blue"))
+
+wplot <- mpr_terms %>%
+  select(Date,T, Update) %>% 
+  distinct() %>% 
+  ggplot() + 
+  geom_col(aes(x=Date, y=T, fill=Update)) + 
+  scale_fill_identity() +
+  theme_minimal() + 
+  theme(legend.position = "none") + 
+  labs(title="Canadian MPR: Word count", 
+       subtitle="Updates in red",
+       x="", y="Number of core words")
+
+plot(wplot)
+```
+
+They are shorter, but clearly the first update is quite long -- almost as long as some main reports. But it is also clear that the reports that replaced them were not shorter: the four-times-a-year version was as long or longer than the bi-annual ones. I will drop all the updates as they seem predominantly significantly shorter. 
+
+A quick side question. Is the pattern down to the person at the top? @Canada seem to think it might be... Let's add a little indicator of the tenure of each Governor.^[This is the same as the POS indicator you may have seen earlier, but a little more subtle.] 
+
+```{r gov}
+# Dates for governors
+rect_df <- 
+  tibble(wh = c("Macklem","Poloz","Carney","Dodge","Theissen"), 
+         st = as.Date(c("2020-06-01", "2013-06-01", "2008-02-01", "2001-02-01", "1994-02-01"))) %>% 
+  mutate(xl=st, xl=if_else(xl<min(mpr_terms$Date), min(mpr_terms$Date), st)) %>%
+  mutate(xh=lag(st), xh=if_else(is.na(xh), max(mpr_terms$Date), xh)) %>%
+  mutate(yl=-Inf, yh=-200, cc=c("purple", "pink", "cyan", "yellow", "green")) 
+           
+wplot + geom_rect(data=rect_df, aes(xmin=xl, xmax=xh, ymin=yl, ymax=yh, fill=cc), alpha=0.33) +
+  labs(subtitle="Governor's tenure below zero line")
+```
+It is beginning to look like Governor number 3 (Mark Carney) is a bit different. 
+
+### DTM
+
+I need to create a _document term matrix_. This is at it's most basic a matrix of word counts, with a single row per document, and a single column for each term. `tidytext` has several functions to create these, and we use `cast_dtm`, having dropped the update documents.^[Turns out this doesn't make much difference but speeds computation a little bit.]
+```{r filt}
+# DTM
+dtm_mpr <- mpr_terms %>%
+  filter(Update=="blue") %>% 
+  cast_dtm(Doc,word,n)
+
+print(dtm_mpr)
+```
+As can be seen from the output, there are almost 6000 terms over the 74 documents. 
+
+Although the object returned from this has a lot of information it it, the most important part is the actual document term matrix itself, giving counts of each term for each document, so the first few lines of it in long `tidy` format are:
+```{r tdy}
+tidy(dtm_mpr)
+```
+More usefully, the first eight rows and columns in wide format are easily obtained as:
+```{r wid, warning=FALSE, message=FALSE}
+tidy(dtm_mpr) %>% 
+  pivot_wider(names_from=term, values_from=count, names_repair = "unique") %>% 
+  slice(1:8) %>% 
+  select(1:9) %>%
+  knitr::kable() %>%
+  kableExtra::kable_styling()
+```
+
+The stemmed version of inflation, _inflat_, is clearly widely in each document, but we don't know in what context it is being used. 
+
+## LDA
+
+Now the LDA is performed. The number of topics needs to be chosen as an input to the algorithm. I pick nine, which is not really enough but will run relatively quickly. Also it works quite well for this data in terms of the story. 
+
+```{r LDA, eval=T}
+# LDA
+k       <- 9
+control <- list(seed=12344321, verbose=2000, iter=1000, burnin=1000)
+lda_mpr <- LDA(dtm_mpr, k=k, method="Gibbs", control=control)
+```
+
+We can retrieve both the words that form the topics and their distribution per topic (beta), and the distribution of those topics over the documents (gamma). There are `tidy` methods built into `tidytext` which will extract these elements easily. 
+
+```{r betagamma, eval=T}
+lda_word_mpr <- tidy(lda_mpr, matrix="beta")
+lda_doc_mpr  <- tidy(lda_mpr, matrix="gamma") %>% 
+  mutate(date = as.Date(str_sub(document,5))) 
+```
+
+Note the documents are best indexed by the date they were written. We can then plot the results in a variety of ways. First, it is common to display words in _Word Clouds_. I pick the 22 most important words in terms of how much of the distribution they explain, and use `geom_text_wordcloud`, weighting the size of each word by `beta`. 
+
+```{r pics, fig.width=9, fig.height=4, eval=T, warning=FALSE}
+col_func <- colorRampPalette(brewer.pal(9, "Set1"))   # Generate colours for topics
+
+pword_clouds <- lda_word_mpr %>% 
+  group_by(topic) %>% 
+  top_n(22, beta) %>%
+  ungroup() %>%
+  ggplot() +
+  geom_text_wordcloud(aes(label=term, size=beta, colour=as.factor(topic))) +
+  scale_colour_manual(values=col_func(k)) + 
+  facet_wrap(~ topic) +
+  theme_minimal() +
+  theme(legend.position="none", plot.background=element_rect(fill="grey88")) +
+  labs(title="Canadian MPR: Topic wordclouds, top 22 words", x="", y="")
+
+plot(pword_clouds)
+```
+
+These are quite nice, but bar charts are sometimes more informative particularly with respect to proportions. There is also information about `gamma`, the proportions of the topics that make up the documents. In this context, as each MPR is dated there is a timeline for the topics that can be matched to events, as is done in @Canada. 
+
+The next bit of code appends the topic colors to the document information. 
+```{r pal}
+lda_doc_mpr <- lda_doc_mpr %>% 
+  left_join(tibble(topic=1:k, cc=col_func(k)), by="topic")
+```
+
+Now create bar charts for the topics and timelines in two different graphs for the topic proportions in the documents.
+```{r all, fig.width=9.5, fig.height=10, eval=T, warning=FALSE}
+pwords <- lda_word_mpr %>% 
+  group_by(topic) %>% 
+  top_n(5, beta) %>%
+  ungroup() %>%
+  mutate(topic=as_factor(topic), term=reorder_within(term, beta, topic)) %>% 
+  ggplot(aes(x=term, y=beta, fill=topic)) +
+  geom_col(alpha=.85) +
+  scale_fill_manual(values=col_func(k)) + 
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_reordered() +
+  facet_wrap(~ topic, scales="free_y") +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title="Canadian MPR: Top five word shares by topic", x="", y="") +
+  coord_flip()
+
+ptopic <- lda_doc_mpr %>% 
+  ggplot() + 
+  geom_area(aes(x=date, y=gamma, group=topic, fill=cc), colour=NA, alpha = .77) + 
+  theme_minimal() +
+  theme(legend.position="none") +
+  scale_y_continuous(expand=c(0,0)) +
+  scale_x_date(expand=c(0,0)) +
+  scale_fill_identity() + 
+  labs(x="", y="") 
+
+ptopic_who <- ptopic + 
+  geom_rect(data=rect_df, aes(xmin=xl, xmax=xh, ymin=-0.075, ymax=-0.025, fill=cc), alpha=0.33) 
+ptopic_grid <- ptopic_who + 
+  facet_wrap( ~ topic, ncol=3) + 
+  labs(title="Canadian MPR: Share of each topic by date",
+       subtitle="Governor's tenure below zero line") 
+
+plot_grid(pwords, ptopic_grid, ptopic_who, 
+          align="v", axis="l", ncol=1, rel_heights=c(1,1.25,0.75))
+```
+
+It seems pretty obvious that there is a 'Carney topic' (number 3), a 'crisis topic' (number 1), and mixtures of different topics in different eras (for example number 8 and 9 for post-recession recovery phases), as well as a 'base topic' of some sort (number 7).
+
+I'll leave it to you to decipher any deeper meaning...
+
+## References

@@ -1,0 +1,124 @@
+## Libraries
+
+library(tidyverse)   # Tidy packages
+library(tidymodels)
+library(lubridate)
+
+library(plm)         # Panel econometrics package
+library(AER)         # Applied Econometrics in R
+library(wooldridge)  # Data
+
+## Simple regression
+
+data("rental")
+
+rent.eq <- formula("log(rent) ~ y90 + log(pop) + log(avginc) + pctstu")
+rent.lm <- lm(rent.eq,  data=rental)
+print(rent.lm)
+summary(rent.lm)
+
+## Panel regressions
+
+prental   <- pdata.frame(rental, index=c("city","year")) # Identifiers
+rent.pool <- plm(rent.eq, data=prental, model="pooling")
+rent.glm  <- glm(rent.eq, data=prental, family="gaussian")
+rent.wit  <- plm(rent.eq, data=prental, model="within")
+rent.ran  <- plm(rent.eq, data=prental, model="random")
+
+print(rent.lm)
+print(rent.pool)
+print(rent.glm)
+print(rent.wit)
+print(rent.ran)
+
+## Clustering 
+
+# Loading the required libraries
+library(lmtest)
+library(multiwayvcov)
+
+# Clustered standard errors - Fixed effect regression (group)
+coeftest(rent.pool, vcov=vcovHC(rent.pool, type="sss", cluster="group"))
+
+# Clustered standard errors - Fixed effect regression (group)
+coeftest(rent.wit, vcov=vcovHC(rent.wit, type="sss", cluster="group"))
+
+## IV estimation
+
+data("fertil2")
+
+children.eq    <- as.formula("children ~ educ + age + agesq")
+children.eqiv  <- as.formula("children ~ educ + age + agesq | . - educ + frsthalf")
+children.eqiv2 <- as.formula("children ~ educ + age + agesq + electric + tv + bicycle | . - educ + frsthalf")
+
+children.lm    <- lm(children.eq,       data=fertil2)
+children.iv    <- ivreg(children.eqiv,  data=fertil2)
+children.iv2   <- ivreg(children.eqiv2, data=fertil2)
+
+summary(children.lm)
+summary(children.iv)
+summary(children.iv2)
+
+fertil2 %>% 
+  select(children) %>% 
+  mutate(fitted.lm = fitted(children.lm)) %>%
+  mutate(fitted.iv = fitted(children.iv)) %>%
+  mutate(case = 1:nrow(fertil2)) %>%
+  filter(case<201) %>% 
+  pivot_longer(cols=-case, names_to="Var", values_to="Val") %>% 
+  ggplot() +
+  geom_line(aes(x=case,y=Val,group=Var,color=Var))
+
+### Using `tidymodels`
+
+# Parsnip
+pars_lm <- linear_reg() %>% 
+  set_engine("lm") %>% 
+  set_mode("regression") 
+
+pars_lm_fit <- pars_lm %>%
+  fit(rent.eq, data=rental)
+
+print(pars_lm_fit, digits=5)
+
+### Pooled Bayesian regression in Stan
+
+# Bayes version: set the prior distributions using rstanarm
+prior_t    <- rstanarm::student_t(df = 1)
+prior_norm <- rstanarm::normal(scale = 0.25)
+prior_aux  <- rstanarm::exponential(1, autoscale = TRUE)
+
+set.seed(123) # Make it replicable
+
+# Make the parsnip model, this time with stan
+bayes_mod <-   
+  linear_reg() %>% 
+  set_engine("stan", 
+             iter = 10000, 
+             prior_intercept = prior_norm, 
+             prior = prior_t, 
+             prior_aux = prior_aux) 
+
+# Fit the model
+bayes_fit <- bayes_mod %>%
+  fit(rent.eq, data=rental)
+
+# Regression-type output
+print(bayes_fit,   digits=5)
+
+sfit   <- bayes_fit$fit$stanfit
+ex_fit <- rstan::extract(sfit)
+
+ex_fit$beta %>% 
+  as_tibble(.name_repair = "unique") %>%
+  rename_all( ~ paste0("beta[", 1:ncol(ex_fit$beta), "]")) %>% 
+  mutate(alpha = ex_fit$alpha, sigma = ex_fit$aux) %>%
+  pivot_longer(cols = starts_with(c("bet", "alp", "sig")), 
+               names_to = "coef", 
+               values_to = "vals" ) %>%
+  ggplot() +
+  geom_density(aes(x=vals, group=coef, fill=coef), color=NA, alpha=.44) + 
+  facet_wrap( ~ coef, scales = "free") +
+  theme_minimal() + 
+  theme(legend.position = "none") +
+  labs(x=NULL, y=NULL, title="Stan estimates")

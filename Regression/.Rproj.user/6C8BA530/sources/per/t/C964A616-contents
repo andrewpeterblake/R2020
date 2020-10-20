@@ -1,0 +1,216 @@
+---
+title: "Fancharts in R"
+subtitle: ""
+author: "Andrew P Blake"
+date: "October 2020"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.align='center')
+```
+
+> [Bank Underground](https://bankunderground.co.uk/2019/11/19/build-your-own-fancharts-in-r/) blog post of the same material but using 2019 data, with associated [GitHub code repository](https://github.com/bank-of-england/FanChartsInR). Code has been updated to reflect innovations to the `tidyverse`, and for other, completely arbitrary reasons.
+
+## Build-your-own fancharts in R
+
+Many statisticians use the free programming language [**R**](https://cran.r-project.org/) for analytical work. It's [**increasingly popular**](https://twitter.com/causalinf/status/1092195704712450048) with economists too. There are many reasons for this. As well as being good at statistics, it is [**well supported**](https://twitter.com/allison_horst/status/1102447015248637953) by a highly engaged [**user community**](https://www.r-bloggers.com/), can produce [**stellar graphics**](https://twitter.com/tylermorganwall/status/1107611280246865920), and allows you to disseminate you work through easy-to-build [**interactive apps**](https://community.rstudio.com/t/shiny-contest-submission-visualise-twitter-interactions/24803) which can be publicised through [**your own blog**](https://bookdown.org/yihui/blogdown/).
+
+Sounds to me like you should get started immediately. Here's a way: read this post on economic model building and forecasting in R. In it, I calculate forecast [**fancharts**](https://en.wikipedia.org/wiki/Fan_chart_(time_series)) using a statistical model, making good use of the tools that comprise the [**tidyverse**](https://www.tidyverse.org/). This set of highly-integrated packages is designed as an efficient way to manipulate and visualise data.
+
+The truth is I can't explain in detail how this is done in a simple blog post, but I can show you. Each necessary step (getting data, building a model, forecasting with it, creating a fanchart) is documented in R code. I use a simple data-coherent model (a vector auto-regression or [**VAR**](https://en.wikipedia.org/wiki/Vector_autoregression)), to forecast US GDP growth and inflation. Let's hope this inspires interested readers to delve deeper into data, models and methods.
+
+## The code
+
+I'm using [**RStudio**](https://www.rstudio.com/) to write and run the code for the four required steps. I'm going to need some libraries, and load them at the start.
+```{r warning=FALSE, message=FALSE}
+library(tidyverse)
+library(lubridate)  # From the tidyverse but not automatically loaded
+```
+
+### Data
+
+I retrieve US GDP growth and inflation data. I'm using US data as it is easy to get. `download.file` is a convenient way to obtain any data from the US Fed's data repository [**FRED**](https://fred.stlouisfed.org/). These are quarterly GDP year-on-year growth rates and the quarterly consumer price index, as of `r day(today())` `r month.name[month(today())]`, `r year(today())`.
+```{r message=FALSE}
+series <- c('A191RO1Q156NBEA', 'CPALTT01USQ661S') # FRED codes for US GDP growth & CPI
+
+download.file(paste("https://fred.stlouisfed.org/series/","/downloaddata/",".csv", sep=series[1]), 
+              destfile = "Growth.csv")
+download.file(paste("https://fred.stlouisfed.org/series/","/downloaddata/",".csv", sep=series[2]), 
+              destfile = "CPI.csv")
+
+Growth <- readr::read_csv("Growth.csv") %>% 
+  rename(index=DATE, value=VALUE) %>% 
+  mutate(series="Growth")
+CPI    <- readr::read_csv("CPI.csv")  %>% 
+  rename(index=DATE, value=VALUE) %>% 
+  mutate(series="CPI")
+
+```
+Next, the necessary series are stored in `Data`. Along the way, the annual inflation rate is calculated from CPI and `index` is renamed `Date` to avoid confusion.
+```{r message=FALSE}
+Data <- pivot_wider(bind_rows(Growth, CPI), names_from = series, values_from = value) %>% 
+  mutate(Inflation=100*(CPI/lag(CPI,4)-1)) %>%
+  select(Date=index, Growth, Inflation) %>% 
+  drop_na() # Drop missing obs to balance dataset
+```
+All good modellers inspect their data so plot the series using `ggplot2`, part of the `tidyverse`.
+```{r warning=FALSE, fig.height=4}
+col_cen  <- c("seagreen","tomato") # Colours for time series/centre of fancharts
+col_tail <- "grey95"               # Colour used later for the tails 
+Data %>% 
+  pivot_longer(cols = -Date, names_to = "Var", values_to = "Val") %>% 
+  ggplot() + 
+  geom_line(aes(x=Date, y=Val, group=Var, colour=Var), size=1.1, show.legend=TRUE) +
+  scale_colour_manual(values=col_cen) +
+  theme_light() + 
+  theme(legend.title = element_blank()) +
+  labs(title="US data", x="", y="",
+       subtitle="GDP growth and inflation: year-on-year quarterly growth rates", 
+       caption=paste0("Source: FRED series ", paste(series, collapse=", ")))
+```
+
+These look fine. Let's build a model.
+
+### The VAR
+
+Excellent packages exist to estimate VARs (such as [**vars**](https://cran.r-project.org/package=vars)), but I do it from scratch. Algebraically our VAR with $m$ lags can be written:
+$$
+   Y_t = \beta_0 +\sum_{i=1}^{m} \beta_i Y_{t-i} + \varepsilon_t
+$$
+
+where $Y_t$ is a vector of inflation and growth in each period. Clever use of the `tidyverse` creates (and names) $m$ lags of each variable in a similar fashion to Answer 3 to [**this question**](https://stackoverflow.com/questions/44750761/adding-multiple-lag-variables-using-dplyr-and-for-loops) on [stack**overflow**](https://stackoverflow.com/). 
+```{r makelags}  
+
+m     <- 4  # maximum lag in VAR
+
+Datal <- Data %>%
+  pivot_longer(cols = -Date, names_to = "key", values_to = "value") %>%
+  mutate(lv = list(0:m)) %>%
+  unnest(cols = c(lv)) %>%
+  group_by(key, lv) %>%
+  mutate(value = lag(value, lv[1])) %>%
+  ungroup() %>%  
+  # Suffixes indicate lagged values
+  mutate(key = if_else(lv==0, key, paste(key,formatC(lv,width=2,flag="0"), sep="_"))) %>%
+  select(-lv) %>%     # Drop the redundant lag index
+  pivot_wider(names_from = key, values_from = value) %>%
+  slice(-c(1:m)) %>% # Remove missing initial values
+  mutate(constant = 1)
+
+```
+I select the lagged values (those with a suffix) and constant as explanatory variables and the rest (except for the date) as dependent ones. These are put in the matrices `Yl` and `Y` respectively.  
+```{r}
+
+s  <- paste(paste(formatC(1:m, width=2, flag="0"),"$",sep=""),collapse="|")
+Yl <- data.matrix(select(Datal,  matches(paste0(s,"|constant"))))
+Y  <- data.matrix(select(Datal, -matches(paste0(s,"|constant|Date"))))
+
+```
+
+The VAR is easy to estimate by solving for the unknown $\beta$'s using:
+
+```{r est}
+  
+bhat <- solve(crossprod(Yl), crossprod(Yl,Y))
+bhat
+
+```
+A nice feature of calculating `bhat` this way is that it automatically labels the output for ready interpretation. Serious modellers would spend some time evaluating their statistical model, but I'm going to press ahead with this one anyway.
+
+### Forecast
+
+Simulating the model to calculate the forecasts and the forecast error variances is done in a loop. A first-order representation of the VAR works best, with the small complication that the parameters need to be re-ordered. 
+```{r}
+
+T     <- nrow(Y) # Number of observations
+nv    <- ncol(Y) # Number of variables
+nf    <- 12      # Periods to forecast
+nb    <- 16      # Periods of back data to plot
+
+# Recover the VAR residuals, calculate error variances
+v     <- crossprod(Y - Yl %*% bhat)/(T-m*nv-1)                  
+bhat2 <- bhat[rep(seq(1,m*nv,m),m) + rep(seq(0,m-1), each=nv),] # Reorder for simulation
+A     <- rbind(t(bhat2), diag(1,nv*(m-1), nv*m))                # First order form - A 
+B     <- diag(1,nv*m,nv)                                        # First order form - B
+cnst  <- c(t(tail(bhat,1)), rep(0,nv*(m-1)))                    # First order constants
+
+# Simulation loop
+Yf     <- matrix(0,nv*m,nf)                  # Stores forecasts
+Pf     <- matrix(0,nv,nf)                    # Stores variances
+
+Yf[,1] <- cnst + A %*% c(t(tail(Y,m)[m:1,])) # First period
+P      <- B %*% v %*% t(B)                   # First period state covariance
+Pf[,1] <- diag(P)[1:nv]                      # Variance
+
+for (k in 2:nf) { 
+  Yf[,k] <- cnst + A %*% Yf[,(k-1)]
+  P      <- A %*% P %*% t(A) + B %*% v %*% t(B)
+  Pf[,k] <- diag(P)[1:nv]
+}
+
+Yf <- t(Yf[1:nv,])
+colnames(Yf) <- colnames(Data)[-1]
+Pf <- t(sqrt(Pf))
+
+```
+At the end `Yf` contains the forecast levels of each variable and `Pf` the forecast standard errors. That's pretty much everything I need.
+
+### Fancharts
+
+Fancharts are sequential distributions, and the `fanplot` visualisation [**package**](https://cran.r-project.org/package=fanplot) actually has older-style Bank of England fancharts built in. Here I'm going to use `ggplot2` to recreate something closer to the current style.
+
+Everything in a single data frame is convenient, so I first splice together the historical data and central forecasts.
+```{r}
+
+fcast_dates <- seq.Date(tail(Data$Date,1), by="quarter", length.out=nf+1)
+fan_data    <- bind_rows(tail(Data,nb), data.frame(Date=fcast_dates[-1], Yf)) %>%
+  pivot_longer(cols = -Date, names_to = "Var", values_to = "Data") 
+
+```
+Next I calculate the coordinates of the five polygons per variable which are the probability bands of the fancharts. Each calculated forecast quantile (stored in `fore_band`) is a lower edge and next higher quantile the upper edge. The upper coordinates are reversed so that the perimeter lines join to make a right side to the polygon. (This makes sense when you go through the code, honest.) I loop through the variables in the VAR adding (and naming) polygons for each variable in turn to the data frame.
+```{r}
+
+qu  <- qnorm(c(.05,.2,.35,.65,.8,.95)) # Specify quartiles to show 30% prob per colour
+
+col_band <- NULL                       # Used to store the band colours 
+for (j in 1:nv) {
+  col_band  <- c(col_band, colorRampPalette(c(col_tail, col_cen[j], col_tail))(7)[2:6])
+  fore_band <- rbind(rep(tail(Y,1)[j], 6), tcrossprod(Pf[,j], qu) + Yf[,j]) 
+  data_coor <- data.frame(rbind(fore_band[,1:5], fore_band[(nf+1):1,2:6])) %>% 
+    rename_with( ~ paste0("Area",1:5)) %>%
+    mutate(Var = colnames(Y)[j], Date = c(fcast_dates, rev(fcast_dates))) %>%
+    pivot_longer(cols = -c(Date, Var), names_to = "Area", values_to = "coord") %>% 
+    mutate(VarArea = paste0(Var, Area)) # This identifies separate bands by variable
+  fan_data <- bind_rows(fan_data, data_coor)
+}
+
+```
+That's pretty much it. I use shaded rectangles to indicate the forecast region (using `geom_rect`), filled polygons to define the different bands (using `geom_polygon`) and then layer on historical/mean forecast data (using `geom_line`). A bit of formatting, apply `facet_wrap()` and I'm done.
+```{r warning=FALSE, fig.height=8}
+
+ggplot(fan_data) + 
+  geom_rect(aes(xmin=max(Date) %m-% months(3*nf), xmax=max(Date), 
+                ymin=-Inf, ymax=Inf), fill=col_tail, alpha=.2) +
+  geom_polygon(aes(x=Date, y=coord, group=Area, fill=VarArea), show.legend=FALSE) +
+  scale_fill_manual(values=col_band) +
+  geom_line(aes(x=Date, y=Data, group=Var, colour=Var), show.legend=FALSE) +
+  scale_colour_manual(values=col_cen) +
+  scale_x_date(expand=c(0,0)) +
+  theme_minimal() +
+  facet_wrap( ~ Var, ncol=1) +
+  labs(title=paste("US data:", nv, "variable VAR with", m, "lags"), 
+       subtitle="GDP and CPI: quarterly year-on-year growth/inflation rates", 
+       caption=paste0("Source: FRED series ", paste(series, collapse=", ")),
+       x="", y="")
+
+```
+
+## Extensions
+
+These look great but customisation is easy -- why not see how [**BBC style graphics**](https://bbc.github.io/rcookbook/) look? (Answer: they look better without the shaded rectangles.) Try experimenting with the model too -- see what effect changing the maximum lag has or maybe add another variable. And use different data. The [**ONS**](https://www.ons.gov.uk) makes UK data available for download in JSON format. A bit more code is needed than with FRED -- this excellent [**blog post**](https://blog.ouseful.info/2016/02/26/json-data-goodness-on-the-new-ons-office-for-national-statistics-website/) will get you up and running in no time. This [**blog post**](https://macro.nomics.world/article/2019-03/rdbnomics-tutorial/) will do the same using the [**DBnomics**](https://db.nomics.world/) data portal which gives acces to a ton of data.
+
+Central bank forecasts are based on considerably more sophisticated models than the one used here, with much more data and above all incorporating expert judgment. But if this post has whetted your appetite, the code chunks should be enough to get you started. So get copying, pasting, running! Oh, and this post was completely written in [**R Markdown**](https://rmarkdown.rstudio.com/). Because you can.

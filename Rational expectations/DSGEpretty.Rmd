@@ -1,0 +1,358 @@
+---
+title: "DSGE estimation"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+bibliography: refsR.bib  
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, fig.align = "center")
+```
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+## DSGE estimation has a lot of moving parts...
+
+- Can we apply all of the techniques necessary to estimate a DGSE model in R?  
+- In the immortal words of somebody, "Yes we can!"
+- Need to pass parameters to a model, solve it, map the data to it, choose new parameters, do it all again until we decide on convergence  
+- Can do this pure maximum likelihood or via Metropolis-Hastings
+- Would be useful if we can initialise MH search effectively
+
+## This is how we do it
+
+### Model
+
+```{r model}
+model_file <- function(theta) {
+  
+  nf    <- 2
+  ns    <- 6
+  np    <- ns-nf
+  nx    <- np+1
+  
+  beta  <- 0.99   #  calibrated
+  sigma <- theta[1]
+  kappa <- theta[2]
+  delta <- theta[3]
+  gamma <- theta[4]
+  rho_1 <- theta[5]
+  rho_2 <- theta[6]
+  rho_3 <- theta[7]
+  Omega <- diag(theta[c(8:10)])
+  
+  labels <- c("eta[1]","eta[2]","eta[3]","i","y","pi")
+  
+  E <- matrix(0,ns,ns)
+  A <- E
+  G <- diag(1,ns,3)
+  
+  diag(E[1:3,1:3]) <- 1
+  diag(A[1:3,1:3]) <- c(rho_1, rho_2, rho_3)
+  
+  E[4,c(3, 4)]       <- c(-1, 1) 
+  E[5,c(1, 4, 5, 6)] <- c(1, -1/sigma, 1, 1/sigma)
+  E[6,c(2, 6)]       <- c(1, beta)
+  
+  A[4,c(4, 6)]       <- c(gamma, (1-gamma)*delta)
+  A[5,5]             <- 1
+  A[6,c(5,6)]        <- c(-kappa, 1)
+  
+  AA <- solve(E,A)
+  BB <- solve(E,G)
+  m  <- eigen(AA)
+
+  Lambda <- diag(m$values)
+  # print(Lambda[abs(Lambda)>1])
+  M      <- solve(m$vectors[,ns:1])
+  N      <- -Re(solve(M[nx:ns,nx:ns])%*%M[nx:ns,1:np])
+  G      <- -solve((AA[nx:ns,nx:ns]-N%*%AA[1:np,nx:ns]), (BB[nx:ns,]-N%*%BB[1:np,]))
+  PP     <- cbind(rbind((AA[1:np,1:np] + (AA[1:np,nx:ns] %*% N)), N), matrix(0,ns,nf))
+  QQ     <- rbind(BB[1:np,] + AA[1:np,nx:ns] %*% G, G)
+
+  
+  
+  return(list(PP, QQ, Omega, labels)) 
+}
+```
+
+## Likelihood
+
+### Kalman filter
+
+```{r likelihood}
+likelihood <- function(theta, y) {
+  
+  #  Code to evaluate the likelihood of a RE model via the Kalman filter
+  t <- nrow(y)
+  
+  # Model solution to obtain state space form
+  # Returns F, V, Sigma, H
+  modl  <- model_file(theta)
+  F     <- modl[[1]]
+  V     <- modl[[2]]
+  Sigma <- modl[[3]]
+  
+  H       <- matrix(0, 3, 6)
+  H[1, 5] <- 1
+  H[2, 6] <- 1
+  H[3, 4] <- 1
+  
+  # COMPUTE MATRICES OF THE STATE SPACE
+  # Y   = H*S
+  # S_t = F*S_[t-1] + eta
+  # Var(eta) = Q, where Q = QQ*Sigma*QQ'
+  
+  ns     <- dim(F)[1]
+  Q      <- V %*% Sigma %*% t(V)
+  mu     <- 0L
+  lik    <- 0L
+  const  <- -log(2*pi)
+
+  # filter
+  beta0  <- matrix(0, 1, ns)
+  p00    <- diag(ns)*10000
+  R      <- 0
+  # Prediction
+  beta10 <- mu + beta0 %*% t(F)
+  p10    <- F %*% p00 %*% t(F) + Q
+  eta    <- y[1,] - beta10 %*% t(H)
+  feta   <- H %*% p10 %*% t(H) + R
+  ifeta  <- qr.solve(feta)
+  # updating
+  K      <- p10 %*% t(H) %*% ifeta
+  beta11 <- beta10 + eta %*% t(K)
+  p11    <- p10 - K %*% H %*% p10
+  
+  for (i in 2:t) {
+    # Prediction
+    beta10 <- mu + beta11 %*% t(F)
+    p10    <- F %*% p11 %*% t(F) + Q
+    eta    <- y[i, ] - beta10 %*% t(H)
+    feta   <- H %*% p10 %*% t(H) + R
+    ifeta  <- qr.solve(feta)
+    # updating
+    K      <- p10 %*% t(H) %*% ifeta
+    beta11 <- beta10 + eta %*% t(K)
+    p11    <- p10 - K %*% H %*% p10
+    
+    liki   <- const - log(det(feta)) - eta %*% ifeta %*% t(eta)
+    lik    <- lik + liki
+  }
+  return(0.5*lik)
+}
+```
+
+### --Likelihood
+
+```{r minus_likelihood}
+minus_likelihood <- function(theta,y,bounds) {
+  # Calls (log)likelihood function
+  # See also: LIKELIHOOD
+
+  # Check if parameters outside bounds
+  if (sum(theta<=bounds[,1] | theta>=bounds[,2]) > 0) { 
+    val <- 10000
+    }
+  else {
+    val <- -likelihood(theta,y)
+    }
+  return(val) 
+}
+```
+
+
+## Initialise
+
+We need to initialise what we need later
+
+```{r estimate, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(actuar)
+
+source("csminwel/csminwel.R")
+source("csminwel/numgrad.R")
+source("csminwel/numHess.R")
+source("csminwel/csminit.R")
+source("csminwel/bfgsi.R")
+
+# source("model_file.R")
+source("ir.R")
+source("priors.R")
+source("logprior.R")
+source("ml_ci.R")
+source("posterior.R")
+source("minus_posterior.R")
+```
+
+Set up parameters, priors, read data  
+```{r}
+iters  <- 20000       # Periods of the MH
+burn   <- 0.8*iters
+nimp   <- 14          # No. periods form imp response
+
+# Read data
+pvalues <- read_excel("Exercise.xls", sheet = "Prior values")
+dvalues <- read_excel("Exercise.xls", sheet = "Data values")
+knitr::kable(pvalues, caption = "Priors (from file)")
+knitr::kable(head(dvalues,10), caption = "Data (from file), first 10 obs.")
+```
+
+Normalise data, sort out priors
+```{r message=FALSE, warning=FALSE}
+y      <- data.matrix(select(dvalues, x, pi, i))
+y      <- sweep(y, 2, apply(y, 2, mean))
+namep  <- pvalues$`Parameter name`
+thetp  <- pvalues$`Starting value`
+pdf_p  <- select(pvalues, `PDF type`, mu, sigma)
+bounds <- select(pvalues, `Lower bound`, `Upper bound`)
+np     <- length(thetp)
+
+# Impulse response for the initial parameter values
+ir(thetp,nimp)
+```
+
+## Maximum likelihood
+
+Maximum likelihood estimates are straightforwardly obtained by maximising the likelihood numerically. 
+```{r, message=FALSE, results='hide'}
+# Maximise likelihood                                        
+Hess <- diag(np)*0.001
+ret_cmil <- csminwelNew(minus_likelihood,thetp,Hess,y,bounds,crit=1e-8,nit=200,Verbose=FALSE)
+```
+These estimates are:
+```{r, message=FALSE}
+intv <- data.frame(Var=namep, m=ret_cmil$xh, sd=sqrt(diag(ret_cmil$H)))
+knitr::kable(intv, caption = "Maximum likelihood estimates")
+```
+
+We can plot these, and highlight $\pm 2$ standard errors, treating them like standard maximum likelihood estimates. 
+```{r, message=FALSE}
+ml_ci(intv,bounds) %>% 
+  ggplot() +
+  geom_area(aes(x=d, y=v, fill=Var), alpha=.33, show.legend=FALSE) +
+  geom_vline(data=intv,aes(xintercept=m-2*sd), color="red", linetype="dotted") +
+  geom_vline(data=intv,aes(xintercept=m+2*sd), color="red", linetype="dotted") +
+  facet_wrap(~Var, scales="free", labeller=label_parsed) +
+  theme_minimal() +
+  scale_y_continuous(expand=c(0, 0)) +
+  labs(title="ML estimates confidence limits", x="", y="")
+```
+
+Implied impulse responses  
+```{r, message=FALSE}
+ir(ret_cmil$xh,nimp)
+```
+
+## Bayesian estimation
+
+Initialise search from maximised posterior
+```{r message=FALSE, results='hide'}
+# Bayesian
+# Maximised posterior for initial values
+ret_cmin <- csminwelNew(minus_posterior,thetp,Hess,y,bounds,pdf_p,crit=1e-8,nit=200,Verbose=FALSE)
+```
+
+Always some issues (which depend on the run): option `Vebose = TRUE` produces **a lot** more output. Now the MH loop, initialised using the maximised posterior  
+```{r message=FALSE, results='hide'}
+# Metropolis Hastings algorithm
+H     <- ret_cmin$H
+K     <- 0.4
+P     <- t(chol(H*K))       # Choleski decomp of H used as scale
+bold  <- ret_cmin$xh        # starting value for DSGE parameters
+pold  <- -ret_cmin$fh       # posterior at bold
+
+# Store results in draws
+draws <- data.frame(matrix(0, iters-burn, np+1))
+colnames(draws) <- c(namep, "zlog_Posterior")
+
+nacc  <- 0
+nout  <- 0
+for (i in 1:iters) {
+  
+  # step 1 Generate new draw from random walk
+  bnew <- bold + P %*% matrix(rnorm(np), np, 1)
+
+  # step 2 Evaluate Posterior at new draw
+  pnew <- posterior(bnew, y, bounds, pdf_p)
+
+  # step 3 compute acceptance probability
+  if (pnew == -9999) {
+    nout   <- nout + 1
+    accept <- 0
+    } 
+  else { accept <- min(c(exp(pnew-pold), 1)) }
+
+  if (runif(1) < accept) {
+    bold <- bnew
+    pold <- pnew
+    nacc <- nacc + 1
+    }
+  if (i > burn) { draws[i-burn,] <- c(bold, pold) }
+}
+```
+
+## Results - convergence
+
+First, check acceptance and out-of-bounds rates  
+```{r comment = 'Answer: '}
+print(paste("Acceptance rate:",nacc/iters))
+print(paste("Out-of-bounds ratio:",nout/iters))
+```
+
+Seems OK --- all we need do now is investigate the draws. First, put them in long form, adding an index for the draw number  
+```{r}
+dd <- mutate(draws, draw=1:nrow(draws)) %>%
+  gather(Var, Val, -draw)
+```
+
+To see if they have converged we plot the sequences 
+```{r}
+ggplot(filter(dd, !Var=="zlog_Posterior")) +
+  geom_line(aes(x=draw, y=Val, color=Var), alpha=.66, show.legend=FALSE) +
+  facet_wrap(~Var, scales="free", labeller=label_parsed) +
+  theme_minimal() +
+  scale_x_continuous(expand=c(0, 0)) +
+  labs(title="MH sequences", x="", y="")
+```
+
+## Results - estimates
+
+As with the maximum likelihood estimates we can tabulate the results  
+```{r}
+draws <- select(draws,-"zlog_Posterior")
+mm    <- apply(draws, 2, mean)
+qq    <- apply(draws, 2, quantile, c(.13, .87))
+vv    <- apply(draws, 2, var)
+hh    <- t(mapply(bayestestR::hdi, draws)) %>% 
+  data.frame() %>% 
+  select(-CI)
+ml <- data.frame(mm, sqrt(vv), t(qq), hh, ret_cmin$xh, sqrt(diag(ret_cmin$H)))
+colnames(ml) <- c("Post. mean", "Std err", "Int 13%", "Int 87%", "CI low", "CI high", "MaxPost", "Std err")
+knitr::kable(ml, digits=4, caption="Estimation results")
+```
+
+But we can do fab graphs too. Density estimates are
+```{r}
+# Shape of prior to plot in background
+priors(namep,bounds,pdf_p) %>%
+  ggplot() +
+  geom_area(aes(x=d, y=v), fill="cyan", alpha=.33) +
+  geom_histogram(data=dd, aes(x=Val, y=..density.., fill=Var), alpha=.55, bins=50) +
+  geom_density(data=dd, aes(x=Val, color=Var), alpha=.66) + 
+  facet_wrap(~Var, scales="free", labeller=label_parsed) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_y_continuous(expand=c(0, 0)) +
+  labs(title="Estimated coefficient densities: priors in cyan", x="", y="")
+```
+
+- Impulse response for the mean parameter values:
+```{r message=FALSE}
+ir(mm, nimp)
+```

@@ -1,0 +1,303 @@
+---
+title: "Network graphs and parts-of-speech"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+bibliography: Textmining.bib
+---
+
+```{r setup, include=F}
+knitr::opts_chunk$set(echo = TRUE, fig.align="center")
+```
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+-------
+
+## Different pictures
+
+@Silge show how to use **bigrams** to tell a story.
+
+```{r warning=FALSE, message=FALSE}
+library(tidyverse)
+library(tidytext)
+library(janeaustenr)
+library(igraph)
+library(ggraph)
+
+bigram_graph <- austen_books() %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2) %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>% 
+  count(word1, word2, sort = TRUE) %>%
+  filter(n > 20) %>%
+  graph_from_data_frame()
+
+set.seed(2017)
+
+ggraph(bigram_graph, layout = "fr") +
+  geom_edge_link(color="darkgreen") +
+  geom_node_point(color="darkgreen") +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1, color="red")
+```
+
+Can we do this for our monetary policy reports? Oh yes. Load the libraries we're going to need to process the reports:
+```{r message=FALSE, warning=FALSE}
+library(pdftools)
+library(stringi)
+library(lubridate)
+```
+and define the function to read and convert the pdfs:
+```{r}
+text_to_frame = function(pdf_file) {
+  
+  date  <- as.Date(substr(pdf_file,5,14))
+  mths  <- month.abb[month(date)]
+  yrs   <- year(date)
+
+  MPR <- suppressMessages(pdf_text(pdf_file))
+  MPR <- gsub("\r\n"," ",MPR)
+  MPR <- gsub("\t"," ",MPR)
+  # MPR <- stringi::stri_escape_unicode(MPR)
+  MPR <- stri_trans_general(MPR, "latin-ascii")
+  MPR <- iconv(MPR, "UTF-8", "ASCII", sub = " ")
+  MPR <- gsub("[[:digit:]]+"," ",MPR)
+  # MPR <- gsub("[[:punct:]]+"," ",MPR)
+  MPR <- gsub("[[:space:]]+"," ",MPR)
+  MPR <- tolower(trimws(MPR))
+  MPR <- gsub("monetary policy report"," ",MPR)
+  MPR <- gsub("onetary policy report"," ",MPR)
+  MPR <- gsub("netary policy report"," ",MPR)
+  MPR <- gsub("m o n e t a r y p o l i c y r e p o r t","",MPR)
+  MPR <- gsub("r e p o r t o n m o n e t a r y p o l i c y","",MPR)
+  MPR <- gsub("bank of canada"," ",MPR)
+  MPR <- gsub("b a n k o f c a n a d a","",MPR)
+  MPR <- gsub("[[:space:]]+"," ",MPR)
+  MPR <- gsub("file information for internal use only"," ",MPR)
+  
+  MPR <- trimws(MPR)
+  MPR_add <- tibble(page=1:length(MPR),
+                    document=pdf_file,
+                    year=year(date),
+                    month=mths,
+                    text=MPR) 
+  
+  gg <- MPR_add$text
+  lm <- tolower(month.name[month(date)])
+  cm <- paste0("^", lm)
+  for (l in 1:2) {
+    gg <- trimws(gsub("^global economy", "", gg))
+    gg <- trimws(gsub("^canadian economy", "", gg))
+    gg <- trimws(gsub("^appendix", "", gg))
+    gg <- trimws(gsub("^update", "", gg))
+    gg <- trimws(gsub("^risks to the inflation outlook", "", gg))
+    gg <- trimws(gsub("^reassessment of canadian potential output growth", "", gg))
+    gg <- trimws(gsub(cm, "", gg))
+    gg <- trimws(gsub(trimws(gsub("", " ", lm)), "", gg))
+    gg <- trimws(gsub("^chart", "", gg))
+    gg <- trimws(gsub("^box", "", gg))
+    gg <- trimws(gsub("^table", "", gg))
+  }
+  gg <- trimws(gsub("bankofcanada ca", "", gg))
+  wr <- which(word(gg) == "bibliography")
+  if (length(wr) < 1) wr <- which(word(gg) == "references") 
+
+  MPR_add$text <- gg
+  
+  if (length(wr) > 0) MPR_add <- MPR_add[1:(wr-1),]
+  
+  MPR_add <- MPR_add %>% 
+    filter(word(text, 1) != "") %>% 
+    filter(word(text, 1) != "contents") %>% 
+    filter(word(text, 5, 6) != "sixtieth anniversary") %>% 
+    filter(word(text, 1, 3) != "the silver dollar") %>% 
+    filter(word(text, 2, 3) != "sterling silver") %>% 
+    filter(word(text, 2, 3) != "gold coin") %>% 
+    filter(word(text, 1, 2) != "gold coin") %>% 
+    filter(word(text, 1, 3) != "library of parliament") %>% 
+    filter(word(text, 1, 4) != "this is a report") %>% 
+    filter(word(text, 1, 5) != "this text is a commentary") %>% 
+    filter(word(text, 1, 5) != "canada s inflation control strategy")
+
+  return(MPR_add)
+}
+```
+
+What about a graph then? How about the 46th report?
+
+```{r}
+files <- list.files(pattern = "^mpr")
+
+j <- 46
+
+text_to_frame(files[[j]]) %>%  
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)  %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>% 
+  count(word1, word2, sort = TRUE) %>%
+  filter(n > 5) %>%
+  graph_from_data_frame() %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(color="purple") +
+  geom_node_point(color="red") +
+  geom_node_text(aes(label=name), vjust = 1, hjust = 1) +
+  theme_void() + 
+  labs(title=files[[j]])
+
+```
+
+How about the 72nd report?
+
+```{r}
+j <- 72
+
+text_to_frame(files[[j]]) %>%  
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)  %>%
+  separate(bigram, c("word1", "word2"), sep = " ") %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word) %>% 
+  count(word1, word2, sort = TRUE) %>%
+  filter(n > 5) %>%
+  graph_from_data_frame() %>% 
+  ggraph(layout = "fr") +
+  geom_edge_link(color="purple") +
+  geom_node_point(color="red") +
+  geom_node_text(aes(label=name), vjust = 1, hjust = 1) +
+  theme_void() + 
+  labs(title=files[[j]])
+```
+
+
+## Lemmatisation and POS
+
+- @udpipe document an R program (`UDpipe`) to do Parts Of Speech tagging (and more)
+- Means we can isolate nouns, verbs etc
+- Alternative way of looking at sentiment and preparing text -- rather than use Bigrams to tell a story can isolate topics better
+- Also allows us to extract the elements of a dictionary
+- Very usefully it can also tell us about the proximity of some words to others
+
+Wikipedia on [Lemmatisation](https://en.wikipedia.org/wiki/Lemmatisation)
+
+> In computational linguistics, lemmatisation is the algorithmic process of determining the lemma of a word based on its intended meaning. Unlike stemming, lemmatisation depends on correctly identifying the intended part of speech and meaning of a word in a sentence, as well as within the larger context surrounding that sentence, such as neighboring sentences or even an entire document.
+
+```{r pos}
+library(udpipe)
+# udpipe_download_model(language = "english-partut")
+ud_model <- udpipe_load_model("english-partut-ud-2.0-170801.udpipe")
+
+# Dates etc for downloaded files
+date  <- as.Date(substr(files,5,14))
+mths  <- month.abb[month(date)]
+yrs   <- year(date)
+
+allnetw <- list()
+all_MPR <- list()
+atannom <- list()
+gpra    <- list()
+
+for(j in 1:length(files)) {
+
+  MPR     <- text_to_frame(files[[j]])  
+
+  dps     <- c("doc_id", "sentence_id")
+  
+  fMPR    <- str_flatten(MPR$text)
+  ANNmpr  <- udpipe_annotate(ud_model, x=fMPR) %>%
+    as.data.frame()
+
+  tANNmpr <- table(ANNmpr$upos)
+  dt      <- as.Date(paste(substr(files[j],13,14), 
+                           substr(files[j],10,11), 
+                           substr(files[j],5,8)), format="%d %m %Y")
+  print(dt)
+  
+  tannom <- data.frame(tANNmpr, Date=dt) %>%
+    rename(POS = Var1)
+  atannom[[j]] <- tannom
+
+  # Co-occurrences
+  cls     <- c("VERB","NOUN", "ADJ")
+  ANNmpr2 <- ANNmpr %>% 
+    filter(upos %in% cls)
+
+  statx <- cooccurrence(x=ANNmpr2, group=dps, term="lemma")
+  titl  <- paste("Co-occurrences within a sentence -", 
+                 month.abb[as.numeric(substr(files[j],10,11))],
+                 substr(files[j],5,8))
+  
+  wordnetwork <- as_tibble(statx) %>% 
+    filter(cooc > 20) %>%
+    graph_from_data_frame()
+  
+  gpr <- ggraph(wordnetwork, layout="fr") +
+    geom_edge_link(aes(edge_alpha=cooc), edge_width=2, edge_colour="red", lineend = "round") + #, 
+    geom_node_text(aes(label=name), colour="blue", size=4, repel=FALSE) +
+    theme_graph(base_family="Arial Narrow") +
+    theme(legend.position="none") +
+    labs(title=titl, subtitle=paste(cls, collapse=", "))
+  
+  gpra[[j]] <- gpr
+  
+}
+```
+
+### Correlated words in the same reports as above
+
+```{r corr, warning=FALSE}
+plot(gpra[[46]])
+plot(gpra[[72]])
+```
+
+### Style?
+
+We can easily count the parts of speech -- say the number of adjectives or the number of adverbs. Then we can look and see if that is contextually dependent. In economic we might want to line that up with any important event.
+
+```{r plots}
+datmpr  <- atannom %>% 
+  bind_rows() %>% 
+  group_by(Date) %>%
+  mutate(nwords = sum(Freq)) %>%
+  ungroup() %>%
+  pivot_wider(names_from = POS, values_from = Freq) %>%
+  mutate(ADJp = ADJ/nwords, VERBp = VERB/nwords) %>% 
+  select(Date, ends_with("p", ignore.case=FALSE)) %>% 
+  pivot_longer(cols=-Date, names_to = "POS", values_to = "values")
+```
+
+Let's put some context -- who was governor when?
+```{r who}
+# Dates for governors
+rect_df <- tibble(Poloz   =as.Date(c("2013-06-01")),
+                  Carney  =as.Date(c("2008-02-01")),
+                  Dodge   =as.Date(c("2001-02-01")),
+                  Theissen=as.Date(c("1994-02-01")))
+```
+
+So how did they communicate?
+```{r why}
+ggplot(rect_df) + 
+  geom_rect(aes(xmin=Theissen %m+% months(15), xmax=Dodge, ymin=-Inf, ymax=Inf), fill="pink", alpha=0.5) +
+  geom_rect(aes(xmin=Dodge, xmax=Carney, ymin=-Inf, ymax=Inf), fill="yellow", alpha=0.2) +
+  geom_rect(aes(xmin=Carney,xmax=Poloz,  ymin=-Inf, ymax=Inf), fill="cyan", alpha=0.2) +
+  geom_rect(aes(xmin=Poloz, xmax=max(datmpr$Date), ymin=-Inf, ymax=Inf), fill="green", alpha=0.2) +
+  geom_smooth(data=datmpr, aes(x=Date, y=100*values, group=POS, color=POS)) +
+  geom_point(data=datmpr,  aes(x=Date, y=100*values, group=POS, color=POS)) +
+  scale_color_manual(values=c("red", "blue")) +
+  ggplot2::annotate("text", x = c(as.Date("1998-01-01"), as.Date("2004-10-01"),
+                                  as.Date("2010-11-01"), as.Date("2016-10-01")), 
+                    y = 12.33, label = c("Theissen", "Dodge", "Carney", "Poloz")) +
+  theme_minimal() +
+  scale_x_date(expand = c(0,0)) +
+  theme(legend.position = "none") +
+  labs(title    = "Percentage of Adjectives (red) and Verbs (blue) in the Bank of Canada MPR",
+       subtitle = "Solid lines and grey areas from LOESS smoothing regressions; colors indicate CB governor",
+       caption  = "Source: Bank of Canada MPR, UDPipe POS tagging", y="", x="")
+```
+
+## References
+

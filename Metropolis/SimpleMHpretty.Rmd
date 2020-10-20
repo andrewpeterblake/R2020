@@ -1,0 +1,417 @@
+---
+title: "MH estimation of a prior"
+author: "Andrew P Blake"
+date: "October 2020"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+> _Disclaimer: The Bank of England does not accept any liability for misleading or inaccurate information or omissions in the information provided. The subject matter reflects the views of the individual presenter and not the wider Bank of England or its Policy Committees._
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=TRUE, fig.align='center')
+```
+
+## Complicated densities
+
+- What if we have a posterior density that is too complicated to factor into a full set of conditional densities?
+- Gibbs Sampling is a procedure that generates _marginal densities_ from _conditional densities_
+- Can we derive a technique that generates marginal densities from a _joint density_?
+- Turns out we (perhaps surprisingly) can, using the _Metropolis-Hastings algorithm_
+
+## A target density
+
+- Consider a posterior likelihood that is the product of a likelihood and $k$ prior densities, say
+$$
+ H(y,\theta) = L(y,\theta)\times P_1(\theta_1)\times P_2(\theta_2)\times P_3(\theta_3)\times ...\times P_k(\theta_k)
+$$
+- This is the _target density_
+- Is it possible to estimate the densities of the underlying $\theta_i$ from this posterior alone?
+- This (amazingly) turns out to be rather simple
+
+## Estimating the prior
+
+- Aim to introduce MH in as simple a context as possible, so we propose that we wish to sample from a posterior distribution for which we don't have an appropriate random number generator
+- We will try an estimate the marginal distributions for the priors alone; essentially $H(y,\theta)$ where $L(y,\theta)$ is flat for all values of the prior
+- This means we know what the marginals should look like -- they are just the priors
+- So assume there are $k$ unknown parameters with a prior density set by the investigator, such as
+$$
+  P(\rho_1) \sim \text{Beta}(1.2,1.8)
+$$
+subject to the arbitrary bounds that $0.001 < \rho_1 <0.999$  
+- In the code we could specify this in a matrix where
+    - Each prior is specified in a row with six arguments
+    - These should be some name, a two-parameter PDF type, the two parameters of the PDF, and a lower and upper bound
+
+## Example 1
+
+- First example: target density is the product of six parameters densities of four types: Normal, Gamma, Inverse Gamma and Beta
+    - Any suitable density could be used as a prior, so the Uniform, say, or the Inverse Weibull or Log Gamma could be slotted in -- and we will later on
+    - All that is required is that the some function exists to evaluate the density
+    - Obviously we could generalize this to one or three or more parameter distributions with appropriate code
+    - For example we could fit a Skew-$t$ say, as long as we can evaluate the (log) density for this 4 parameter distribution
+    - See Klugman et al. _Loss Models_ for a very comprehensive list of densities
+
+```{r Ex1, warning = FALSE}
+library(knitr)
+library(kableExtra)
+
+pp <- data.frame(name = c("beta", "rho[1]", "kappa",  "mu",    "sigma[1]",  "sigma[2]"), 
+                 lb   = c(0.001,  0.001,    0.001,    -5,      0.001,       0.001),
+                 ub   = c(0.999,  0.999,    3,        1,       5,           5),
+                 PDF  = c("beta", "beta",   "gamma",  "norm",  "invgamma",  "invgamma"), 
+                 p1   = c(2.3,    1.2,      2,        -2,      12,          9),
+                 p2   = c(1.2,    1.8,      4,        0.55,    0.05,        0.075),
+                 stringsAsFactors = FALSE)
+
+kable(pp, digits=3) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+#### Parameters of six densities used in Example 1
+
+## Analytic densities
+
+```{r libs, message=FALSE, warning=FALSE, echo=FALSE}
+library(actuar)
+library(tidyverse)
+```
+
+```{r theoretical, message=FALSE, warning=FALSE}
+densd <- NULL
+for (k in 1:dim(pp)[1]) {
+  x <- seq(pp$lb[k], pp$ub[k], length.out=100)
+  p <- exec(paste0("d", pp$PDF[k]), x, pp$p1[k], pp$p2[k])
+  densd <- bind_rows(densd,
+                     data.frame(dens=p, dom=x, PDF=pp$PDF[k], Parameter=pp$name[k], 
+                                stringsAsFactors = FALSE))
+}
+```
+
+```{r pdens}
+plt <- ggplot(densd) +
+  geom_area(aes(x=dom, y=dens, group=Parameter, fill=PDF), color=NA, alpha=.7) +
+  theme_minimal() +
+  labs(title="Priors", x="", y="") +
+  facet_wrap(~Parameter, scales="free", labeller=label_parsed, ncol=2)
+plot(plt)
+```
+
+#### Plots of the theoretical densities given parameters in Table
+
+## Random draws
+
+```{r warning=FALSE}
+drawd <- NULL
+n     <- 5000
+for (k in 1:dim(pp)[1]) {
+  d     <- exec(paste0("r", pp$PDF[k]), n, pp$p1[k], pp$p2[k])
+  drawd <- bind_rows(drawd,
+                     data.frame(val=d, PDF=pp$PDF[k], Parameter=pp$name[k], 
+                                stringsAsFactors = FALSE))
+}
+```
+
+```{r warning=FALSE}
+plt <- ggplot(bind_rows(drawd, densd)) +
+  geom_histogram(aes(x=val, y=..density.., group=PDF, fill=PDF), 
+                 alpha=.5, bins=50, color="grey77") +
+  geom_area(aes(x=dom, y=dens, group=PDF, fill=PDF), 
+            color=NA, alpha=.3) +
+  theme_minimal() +
+  labs(title=paste("Simulated vs. theoretical densities, n =",n),x="",y="") +
+  facet_wrap(~Parameter, ncol=2, scales = "free", labeller = label_parsed)
+plot(plt)
+```
+<div class="centered">
+True density known so we can draw from an appropriate random number generator
+</div>
+
+## Estimating the marginals from the joint density
+
+- First we need to understand the estimation procedure
+- The MH algorithm uses only information from the posterior to estimate the marginal processes that generated it
+- Contrast with Gibbs Sampling that uses conditional densities to approximate the unconditional one and then back out the marginals
+
+## Metropolis-Hastings
+
+- Our aim is to draw samples from some distribution
+$$
+   H(\theta)
+$$
+where a direct approach is not feasible
+- The Metropolis-Hastings algorithm requires that we can evaluate this posterior density
+- As the form of the marginals is (potentially) unknown, we draw values from some arbitrary density and decide whether it looks like it came from the marginals that generated the posterior
+- $H(\theta)$ is typically the posterior density where this distribution may be too complex to directly sample
+
+- Indirect approach is to specify a _candidate density_
+$$
+  q(\theta^{k+1}|\theta^k)
+$$
+from which we _can_ draw candidate draws
+- The MH algorithm requires that we are able to evaluate $\frac{H(\theta^{k+1})}{H(\theta^k)}$
+- Then draw a candidate value $\theta^{k+1}$ from $q(\theta^{k+1}|\theta^k)$  
+- Accept this candidate value with the probability
+$$
+  \alpha = \min \left(\frac{H(\theta^{k+1})/q(\theta^{k+1}|\theta^k)}{H(\theta^k)/q(\theta^k|\theta^{k+1})}, 1\right)
+$$
+- Practically, compute $\alpha$ and draw a number $u$ from $U(0,1)$
+    - If $u<\alpha$ accept $\theta^{k+1}$ otherwise keep $\theta^k$
+
+## Simplification
+
+- The _random walk_ version of the algorithm specifies the candidate density $q(\theta^{k+1}|\theta^k)$ as  
+$$
+ \theta^{k+1} = \theta^k + \epsilon_t
+$$ 
+where $\epsilon_t\sim N(0,\Sigma)$ for some $\Sigma$ (which we need to choose)
+- Let $\theta^k$ be some existing draw and $\theta^{k+1}$ be a new draw
+- We can write
+$$
+  \epsilon_t = \theta^{k+1}-\theta^k
+$$
+then
+$$
+  P(\epsilon_t) = P(\theta^{k+1}-\theta^k)
+$$
+
+- Because this is a normal density (which is symmetric) then  
+$$
+  P(\epsilon_t) = P(-\epsilon_t)
+$$
+- Symmetry implies an acceptance probability of  
+$$
+\frac{H(\theta^{k+1})}{H(\theta^k)}
+$$
+as $q(\theta^{k+1}|\theta^k) = q(\theta^k|\theta^{k+1})$
+
+## Algorithm
+
+*  **Step 1** Draw a _candidate_ value $\theta^{G+1}$ from $q(\theta^{k+1}|\theta^k)$, specifically $\theta^{k+1} = \theta^k + \epsilon_t$ where $\epsilon_t\sim N(0,\Sigma)$
+
+*  **Step 2** Compute the acceptance probability 
+$$
+  \alpha = \min \left(\frac{H(\theta^{k+1})}{H(\theta^k)}, 1\right)
+$$
+
+*  **Step 3** If $u\sim U(0,1)$ is less than $\alpha$, keep $\theta^{k+1}$, else repeat $\theta^k$ and discard the new draw
+
+- Note that
+    - The density $H(\theta)$ will usually be a posterior, combining the priors and likelihood information
+    - At present we have no likelihood information, so all we need is a function to evaluate the (log) joint prior
+
+```{r}
+evaluate_log_prior <- function(v, p) {
+  if (length(v) != dim(p)[1]) {
+    print("Priors/params inconsistent")
+    return(0)
+  }
+  d <- matrix(0, length(v), 1)
+  for (k in 1:length(v)) {
+    d[k] <- exec(paste0("d", p$PDF[k]), v[k], p$p1[k], p$p2[k])
+  }
+  return(sum(log(d)))
+}
+
+posterior <- function(v, p) {
+  return(evaluate_log_prior(v, p))
+}
+```
+
+## A very simple problem
+
+- There is no data (or indeed model) to pass to the posterior function (as there is no likelihood)  
+- We will generalize this in later lectures to incorporate likelihood information 
+```{r MH_function}
+MH_RW <- function(init_val, p, reps, burn, scale) {
+  np     <- length(init_val)
+  b_old  <- init_val
+  lp_old <- posterior(b_old, p)
+  draws  <- matrix(0, np, reps-burn, dimnames=list(p$name))  # Store draws
+  nacc   <- 0                                                # Number of acceptances
+  for (i in 1:reps) {
+    b_new <- b_old + scale*rnorm(np)                         # New draw of the parameers
+    if (all(b_new < p$ub & b_new > p$lb)) {                  # Test if draw withing bounds
+      lp_new <- posterior(b_new, p)
+      if (is.nan(lp_new)) {lp_new <- -Inf}
+      if (runif(1) < min(exp(lp_new-lp_old), 1)) {           # Test to accept or not
+        b_old  <- b_new
+        lp_old <- lp_new
+        if (i > burn) nacc <- nacc+1
+        }
+      }
+    if (i > burn) draws[,i-burn] <- b_old  # Store past the burn in period only
+    }   
+  print(paste("Acceptance ratio:", nacc/(reps-burn)))
+  return(draws)
+  }
+```
+- We need to specify the random walk: we assume $\Sigma = sI$
+- We should choose a value of $s$ to ensure that the whole parameter space is explored
+    - If $s$ too small we don't walk far enough, and stay too close to potentially only local maxima
+    - If $s$ too large may jump over highest density points at every step and take a long time to converge
+- We check to see if about the right size by monitoring the acceptance rate: between about 1/5 and 2/5 about right
+
+## Example 1
+
+- Choose some arbitrary initial values at which we can evaluate our posterior likelihood (remembering for this example this only the joint prior)
+```{r Posterior}
+init_val  <- c(.9,.2,.4,-2,1.5,1.5)
+lp <- posterior(init_val, pp)
+```
+- These are `r init_val`
+- As we have chosen values close to the highest density this evaluates as `r lp`
+- We choose $s=0.25$ and do 100000 iterations and discard the first half; we get the following message
+```{r MHcall}
+reps  <- 100000
+burn  <- reps/2
+draws <- MH_RW(init_val, pp, reps, burn, 0.25) 
+```
+- The acceptance ratio is fine  
+
+```{r warning=FALSE}
+pmh <-  as.data.frame(t(draws)) %>% 
+  mutate(X = 1:(reps-burn)) %>%
+  pivot_longer(cols=-X, names_to="Parameter", values_to="val") %>%
+  bind_rows(densd) %>%
+  ggplot() + 
+  geom_line(aes(x=X, y=val, color=Parameter), alpha=.75, show.legend=F) +
+  facet_wrap(~Parameter, scales="free", labeller=label_parsed, ncol=2) +
+  theme_minimal() + 
+  labs(title="RW-MH estimate of pure prior", x="", y="") 
+plot(pmh)
+```
+
+#### Plots of the 50,000 draws
+
+```{r warning=FALSE}
+pmh <-  as.data.frame(t(draws)) %>% 
+  mutate(X = 1:(reps-burn)) %>%
+  slice(1:333) %>% 
+  pivot_longer(cols=-X, names_to="Parameter", values_to="val") %>%
+  bind_rows(densd) %>%
+  ggplot() + 
+  geom_line(aes(x=X, y=val, color=Parameter), alpha=.75, show.legend=F) +
+  facet_wrap(~Parameter, scales="free", labeller=label_parsed, ncol=2) +
+  theme_minimal() + 
+  labs(title="RW-MH estimate of pure prior", x="", y="") 
+plot(pmh)
+```
+
+#### Plots of first 333 draws
+
+```{r warning=FALSE}
+pmh <-  as.data.frame(t(draws)) %>% 
+  pivot_longer(cols=everything(), names_to="Parameter", values_to="val") %>%
+  bind_rows(densd) %>%
+  ggplot() + 
+  geom_area(aes(x=dom, y=dens, group=PDF), fill="grey66", color=NA, alpha=.7) +
+  geom_histogram(aes(x=val, y=..density.., color=Parameter, fill=Parameter), 
+                 alpha=.3, bins=50, show.legend=F) +
+  facet_wrap(~Parameter, scales="free", labeller=label_parsed, ncol=2) +
+  theme_minimal() + 
+  labs(title="RW-MH estimate of pure prior", x="", y="") 
+plot(pmh)
+```
+
+#### Histograms of the draws and the theoretical priors  
+
+## Example 2
+
+```{r prior2}
+p2 <- data.frame(name = c("eta", "zeta[1]", "zeta[2]", "delta", 
+                          "alpha[1]", "alpha[2]", "upsilon[1]", "upsilon[2]"), 
+                 lb   = c(0.25, 0.001, 0.001, 0.001, 1.001, 1.001, 0.001, 0.001),
+                 ub   = c(5, 6, 3, 5, 5, 5, 0.999, 0.999),
+                 PDF  = c("invweibull", "paralogis", "paralogis", "invpareto", 
+                          "lgamma", "lgamma", "unif", "unif"), 
+                 p1   = c(2.3, 1, 2,  2,   2, 3, 0.3, 0.5),
+                 p2   = c(1.2, 4, 3,  0.3, 5, 4, 0.7, 1), 
+                 stringsAsFactors = FALSE)
+
+kable(p2, digits=3) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+
+#### All-different distributions: Inverse Weibull, Paralogistic, Inverse Pareto, Log Gamma and Uniform  
+
+```{r prior2a}
+densd2 <- NULL
+for (k in 1:dim(p2)[1]) {
+  x <- seq(p2$lb[k], p2$ub[k], length.out=1000)
+  p <- exec(paste0("d", p2$PDF[k]), x, p2$p1[k], p2$p2[k])
+  densd2 <- bind_rows(densd2,
+                      data.frame(dens=p, dom=x, PDF=p2$PDF[k], Parameter=p2$name[k], 
+                                 stringsAsFactors = FALSE))
+}
+```
+
+```{r}
+plt <- ggplot(densd2) +
+  geom_area(aes(x=dom, y=dens, group=Parameter, fill=PDF), color=NA, alpha=.7) +
+  theme_minimal() +
+  labs(title="Priors", x="", y="") +
+  facet_wrap(~Parameter, scales="free", labeller=label_parsed, ncol=2)
+plot(plt)
+```
+
+#### Plots of the theoretical densities given parameters in Table 
+
+```{r MHcall2, warning=FALSE, results='hide'}
+init_val2  <- c(1,1,1,1,2,2,.5,.5)
+draws2     <- MH_RW(init_val2, p2, reps, burn, 0.125) 
+pmh <-  as.data.frame(t(draws2)) %>% 
+  pivot_longer(cols=everything(), names_to="Parameter", values_to="val") %>%
+  bind_rows(densd2) %>%
+  ggplot() + 
+  geom_histogram(aes(x=val, y=..density.., group=Parameter), 
+                 alpha=.7, bins=75, color="grey55", fill="grey88") +
+  geom_area(aes(x=dom, y=dens, group=PDF, fill=PDF), color=NA, alpha=.5) +
+  facet_wrap(~Parameter, scales="free", labeller=label_parsed, ncol=2) +
+  theme_minimal() + 
+  labs(title="RW-MH estimate of pure prior, Example 2", x="", y="") 
+plot(pmh)
+```
+
+#### Walk a little less $s=0.125$, could iterate a little more
+
+## Endogenous walks
+
+- The means and variances of the sequences of draws can be calculated  
+```{r moments}
+mean_draw <- rowMeans(draws2)
+se_draw   <- sqrt(diag(var(t(draws2))))
+kable(data.frame(mean = mean_draw, se = se_draw)) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
+- Why not re-initialize using these? 
+    - We would probably still need to scale the random walk, but it now gives differential scale depending on each parameter
+- This means adjusting overall scaling so we set that to $s = 0.33$
+
+```{r warning=FALSE,  message=FALSE, results='hide'}
+draws3 <- MH_RW(mean_draw, p2, reps, burn, 0.33*se_draw) 
+
+pmh <-  as.data.frame(t(draws3)) %>% 
+  pivot_longer(cols=everything(), names_to = "Parameter", values_to = "val") %>%
+  bind_rows(densd2) %>%
+  ggplot() + 
+  geom_histogram(aes(x=val, y=..density.., group=Parameter), 
+                 alpha=.7, bins=75, color="grey55", fill="grey88") +
+  geom_area(aes(x=dom, y=dens, group=PDF, fill=PDF), color=NA, alpha=.5) +
+  facet_wrap(~Parameter, scales="free", labeller=label_parsed, ncol=2) +
+  theme_minimal() + 
+  labs(title="RW-MH estimate of pure prior, Example 2a", x="", y="") 
+plot(pmh)
+```
+
+#### Plot densities of the resulting draws from the re-initialized MH
+
+- Now the implied moments are
+```{r moments2}
+mean_draw <- rowMeans(draws3)
+se_draw   <- sqrt(diag(var(t(draws3))))
+kable(data.frame(mean = mean_draw, se = se_draw)) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F)
+```
