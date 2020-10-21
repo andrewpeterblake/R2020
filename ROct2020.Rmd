@@ -213,4 +213,4 @@ Features Laurie the Dog who didn't appreciate being left alone for a whole ten m
 <iframe src="https://attendee.gotowebinar.com/recording/2858991226632129027" width="640" height="600" frameborder="0" allow="autoplay; fullscreen" allowfullscreen></iframe>
 </center>
 
-The two books referred to at the end are Gelman et al. as mentioned above (published by CUP, and see http://www.stat.columbia.edu/~gelman/regression for additional material), and Richard Macelreath's _Statistical Rethinking_ (2nd ed), which has it's own GitHub https://github.com/rmcelreath/rethinking).
+The two books referred to at the end are Gelman et al. as mentioned above (published by CUP, and see http://www.stat.columbia.edu/~gelman/regression for additional material), and Richard MacElreath's _Statistical Rethinking_ (2nd ed), which has it's own GitHub https://github.com/rmcelreath/rethinking).
